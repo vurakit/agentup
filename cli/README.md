@@ -109,8 +109,8 @@ $ agentup init --platform claude --lang go
 
 ## Links
 
-- **GitHub:** [github.com/vurakit/angetup](https://github.com/vurakit/angetup)
-- **Report issues:** [github.com/vurakit/angetup/issues](https://github.com/vurakit/angetup/issues)
+- **GitHub:** [github.com/vurakit/agentup](https://github.com/vurakit/agentup)
+- **Report issues:** [github.com/vurakit/agentup/issues](https://github.com/vurakit/agentup/issues)
 
 ## License
 

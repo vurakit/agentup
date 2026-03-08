@@ -1,6 +1,6 @@
 # AgentUp
 
-![Version](https://img.shields.io/badge/version-1.3.0-blue)
+![Version](https://img.shields.io/badge/version-1.4.0-blue)
 ![Languages](https://img.shields.io/badge/languages-Go%20%7C%20Node.js%20%7C%20Rust-green)
 ![Platforms](https://img.shields.io/badge/platforms-Claude%20%7C%20Cursor%20%7C%20Windsurf%20%7C%20Antigravity-purple)
 ![Python](https://img.shields.io/badge/python-3.x-yellow)
@@ -32,7 +32,7 @@ npx @agentup/cli init --platform claude --lang rust --no-frontend
 
 **Supported platforms:** `claude` · `cursor` · `windsurf` · `antigravity`
 
-**Supported languages:** `go` · `nodejs` · `rust` · `python` *(coming soon)* · `database` *(coming soon)*
+**Supported languages:** `go` · `nodejs` · `rust` · `python` _(coming soon)_ · `database` _(coming soon)_
 
 **Frontend skill** (UI/UX) is installed by default alongside any language skill.
 
@@ -70,20 +70,20 @@ It also appends the skill workflow to your AI config file (`CLAUDE.md`, `.cursor
 
 13 searchable knowledge domains for production Go code.
 
-| Domain | Coverage |
-|--------|----------|
-| `pattern` | Functional Options, Table-Driven, Middleware, Pipeline, Repository... |
-| `package` | Package recommendations by use case |
-| `error` | errors.Is, fmt.Errorf %w, sentinel errors, custom types |
-| `concurrency` | Goroutines, channels, worker pools, context cancellation |
-| `perf` | Allocations, profiling, sync.Pool, connection pooling |
-| `test` | Table-driven, httptest, fuzzing, benchmarks, mocking |
-| `interface` | Interface design, composition, contracts |
-| `arch` | Project structure, Clean Architecture, DDD |
-| `idiom` | Go conventions, naming, style |
-| `anti` | Common anti-patterns to avoid |
-| `tooling` | go vet, golangci-lint, pprof, dlv |
-| `module` | Go modules, versioning, workspaces |
+| Domain        | Coverage                                                              |
+| ------------- | --------------------------------------------------------------------- |
+| `pattern`     | Functional Options, Table-Driven, Middleware, Pipeline, Repository... |
+| `package`     | Package recommendations by use case                                   |
+| `error`       | errors.Is, fmt.Errorf %w, sentinel errors, custom types               |
+| `concurrency` | Goroutines, channels, worker pools, context cancellation              |
+| `perf`        | Allocations, profiling, sync.Pool, connection pooling                 |
+| `test`        | Table-driven, httptest, fuzzing, benchmarks, mocking                  |
+| `interface`   | Interface design, composition, contracts                              |
+| `arch`        | Project structure, Clean Architecture, DDD                            |
+| `idiom`       | Go conventions, naming, style                                         |
+| `anti`        | Common anti-patterns to avoid                                         |
+| `tooling`     | go vet, golangci-lint, pprof, dlv                                     |
+| `module`      | Go modules, versioning, workspaces                                    |
 
 **10 stack guidelines:** `web-gin` · `web-echo` · `web-fiber` · `web-stdlib` · `grpc` · `cli` · `database` · `microservice` · `cloud-native` · `data-pipeline`
 
@@ -95,20 +95,20 @@ It also appends the skill workflow to your AI config file (`CLAUDE.md`, `.cursor
 
 14 searchable knowledge domains for production Node.js/TypeScript code.
 
-| Domain | Coverage |
-|--------|----------|
-| `pattern` | Factory, Strategy, Middleware, Decorator, Observer... |
-| `package` | Package recommendations by use case |
-| `error` | Custom error classes, Result types, error boundaries |
-| `async` | Promises, async/await, concurrency patterns |
+| Domain       | Coverage                                                  |
+| ------------ | --------------------------------------------------------- |
+| `pattern`    | Factory, Strategy, Middleware, Decorator, Observer...     |
+| `package`    | Package recommendations by use case                       |
+| `error`      | Custom error classes, Result types, error boundaries      |
+| `async`      | Promises, async/await, concurrency patterns               |
 | `typescript` | Generics, discriminated unions, utility types, decorators |
-| `perf` | Event loop, memory leaks, clustering, caching |
-| `test` | Vitest, mocking, integration tests, snapshot tests |
-| `arch` | Modular monolith, Clean Architecture, feature folders |
-| `idiom` | Node.js conventions, ESM, barrel exports |
-| `anti` | Callback hell, blocking I/O, memory leaks |
-| `tooling` | ESLint, Prettier, tsx, esbuild, turborepo |
-| `module` | npm workspaces, monorepo, versioning |
+| `perf`       | Event loop, memory leaks, clustering, caching             |
+| `test`       | Vitest, mocking, integration tests, snapshot tests        |
+| `arch`       | Modular monolith, Clean Architecture, feature folders     |
+| `idiom`      | Node.js conventions, ESM, barrel exports                  |
+| `anti`       | Callback hell, blocking I/O, memory leaks                 |
+| `tooling`    | ESLint, Prettier, tsx, esbuild, turborepo                 |
+| `module`     | npm workspaces, monorepo, versioning                      |
 
 **12 stack guidelines:** `web-express` · `web-fastify` · `web-nestjs` · `web-hono` · `web-nextjs` · `web-remix` · `orm-prisma` · `orm-drizzle` · `database` · `graphql` · `auth` · `realtime`
 
@@ -118,21 +118,21 @@ It also appends the skill workflow to your AI config file (`CLAUDE.md`, `.cursor
 
 14 searchable knowledge domains for production Rust code.
 
-| Domain | Coverage |
-|--------|----------|
-| `pattern` | Builder, Newtype, Typestate, RAII, Iterator adaptor... |
-| `crate` | Crate recommendations by use case |
-| `error` | thiserror, anyhow, custom error types, Result chaining |
-| `concurrency` | Tokio tasks, channels, Mutex, RwLock, rayon |
-| `trait` | Trait objects, blanket impls, associated types |
-| `perf` | Zero-cost abstractions, SIMD, allocator, profiling |
-| `test` | Unit, integration, property-based, cargo-nextest |
-| `arch` | Domain-driven design, hexagonal, workspace layout |
-| `idiom` | Ownership, borrowing, lifetimes, idiomatic patterns |
-| `anti` | Clone overuse, unwrap in prod, blocking async |
-| `tooling` | clippy, rustfmt, cargo-audit, flamegraph |
-| `module` | Workspace, feature flags, crate versioning |
-| `unsafe` | Raw pointers, FFI, unsafe blocks, soundness |
+| Domain        | Coverage                                               |
+| ------------- | ------------------------------------------------------ |
+| `pattern`     | Builder, Newtype, Typestate, RAII, Iterator adaptor... |
+| `crate`       | Crate recommendations by use case                      |
+| `error`       | thiserror, anyhow, custom error types, Result chaining |
+| `concurrency` | Tokio tasks, channels, Mutex, RwLock, rayon            |
+| `trait`       | Trait objects, blanket impls, associated types         |
+| `perf`        | Zero-cost abstractions, SIMD, allocator, profiling     |
+| `test`        | Unit, integration, property-based, cargo-nextest       |
+| `arch`        | Domain-driven design, hexagonal, workspace layout      |
+| `idiom`       | Ownership, borrowing, lifetimes, idiomatic patterns    |
+| `anti`        | Clone overuse, unwrap in prod, blocking async          |
+| `tooling`     | clippy, rustfmt, cargo-audit, flamegraph               |
+| `module`      | Workspace, feature flags, crate versioning             |
+| `unsafe`      | Raw pointers, FFI, unsafe blocks, soundness            |
 
 **11 stack guidelines:** `web-axum` · `web-actix` · `web-warp` · `web-rocket` · `grpc` · `database` · `cli` · `auth` · `async-runtime` · `wasm` · `embedded`
 
@@ -148,9 +148,9 @@ Installed by default with any language skill. Covers design systems, component p
 
 ### Coming Soon
 
-| Skill | Description |
-|-------|-------------|
-| **Python** | Django, FastAPI, Flask, async patterns, type hints, testing, packaging |
+| Skill        | Description                                                                     |
+| ------------ | ------------------------------------------------------------------------------- |
+| **Python**   | Django, FastAPI, Flask, async patterns, type hints, testing, packaging          |
 | **Database** | SQL optimization, schema design, migrations, indexing, PostgreSQL, MySQL, Redis |
 
 ---
