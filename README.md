@@ -1,14 +1,16 @@
 # AgentUp
 
-![Version](https://img.shields.io/badge/version-1.2.0-blue)
+![Version](https://img.shields.io/badge/version-1.3.0-blue)
 ![Languages](https://img.shields.io/badge/languages-Go%20%7C%20Node.js%20%7C%20Rust-green)
-![Platforms](https://img.shields.io/badge/platforms-Claude%20%7C%20Cursor%20%7C%20Windsurf-purple)
+![Platforms](https://img.shields.io/badge/platforms-Claude%20%7C%20Cursor%20%7C%20Windsurf%20%7C%20Antigravity-purple)
 ![Python](https://img.shields.io/badge/python-3.x-yellow)
 ![License](https://img.shields.io/badge/license-MIT-orange)
 
 **AI skills that make your coding assistant write production-grade code.**
 
 AgentUp injects curated knowledge — design patterns, package recommendations, architecture guidelines, and best practices — directly into your AI coding environment. One command, instant upgrade.
+
+[![PayPal](https://img.shields.io/badge/PayPal-Support%20this%20project-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://paypal.me/thinhntq)
 
 ---
 
@@ -30,7 +32,7 @@ npx @agentup/cli init --platform claude --lang rust --no-frontend
 
 **Supported platforms:** `claude` · `cursor` · `windsurf` · `antigravity`
 
-**Supported languages:** `go` · `nodejs` · `rust`
+**Supported languages:** `go` · `nodejs` · `rust` · `python` *(coming soon)* · `database` *(coming soon)*
 
 **Frontend skill** (UI/UX) is installed by default alongside any language skill.
 
@@ -144,6 +146,15 @@ Installed by default with any language skill. Covers design systems, component p
 
 ---
 
+### Coming Soon
+
+| Skill | Description |
+|-------|-------------|
+| **Python** | Django, FastAPI, Flask, async patterns, type hints, testing, packaging |
+| **Database** | SQL optimization, schema design, migrations, indexing, PostgreSQL, MySQL, Redis |
+
+---
+
 ## How It Works
 
 ```
@@ -241,16 +252,6 @@ Contributions welcome! When adding or editing CSV entries:
 - Package/crate names must exist on the official registry
 - CSV format: proper quoting, UTF-8, LF line endings
 - Follow the existing schema for the file you're editing
-
----
-
-## Support the Project
-
-If AgentUp saves you time, consider buying the author a coffee!
-
-[![PayPal](https://img.shields.io/badge/PayPal-Donate-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://paypal.me/thinhntq)
-
-Every contribution helps keep the skill databases updated and growing. Thank you!
 
 ---
 
