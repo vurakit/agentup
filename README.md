@@ -248,10 +248,7 @@ Contributions welcome! When adding or editing CSV entries:
 
 If AgentUp saves you time, consider buying the author a coffee!
 
-| Method | Details |
-|--------|---------|
-| **PayPal** | [paypal.me/agentup](https://paypal.me/agentup) |
-| **MoMo** | `0123 456 789` |
+[![PayPal](https://img.shields.io/badge/PayPal-Donate-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://paypal.me/thinhntq)
 
 Every contribution helps keep the skill databases updated and growing. Thank you!
 
