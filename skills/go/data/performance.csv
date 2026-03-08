@@ -1,0 +1,578 @@
+No,Category,Issue,Keywords,Description,Do,Dont,Code Good,Code Bad,Impact,Measurement
+1,Allocation,sync.Pool for object reuse,"sync.Pool, reuse, allocation, GC pressure","Use sync.Pool to reuse frequently allocated objects and reduce GC pressure. sync.Pool maintains a pool of temporary objects that can be retrieved and returned, avoiding repeated heap allocations for short-lived objects.","Use sync.Pool for objects that are allocated and freed frequently, such as buffers or request-scoped structs. Always reset the object state before putting it back into the pool.","Do not use sync.Pool for long-lived objects or objects with complex initialization. Do not assume objects persist across GC cycles, as the pool may be cleared.","var bufPool = sync.Pool{
+	New: func() interface{} {
+		return new(bytes.Buffer)
+	},
+}
+
+func process(data []byte) string {
+	buf := bufPool.Get().(*bytes.Buffer)
+	defer func() {
+		buf.Reset()
+		bufPool.Put(buf)
+	}()
+	buf.Write(data)
+	return buf.String()
+}","func process(data []byte) string {
+	buf := new(bytes.Buffer)
+	buf.Write(data)
+	return buf.String()
+}",High,"go test -bench=. -benchmem; compare allocs/op and B/op before and after using sync.Pool"
+2,Allocation,Pre-allocate slices with make,"make, slice, capacity, pre-allocate","Pre-allocate slice capacity when the size is known or can be estimated. This avoids repeated allocations and copies caused by append growing the underlying array.","Use make([]T, 0, n) when you know or can estimate the number of elements. This allocates the backing array once upfront.","Do not use append in a loop without pre-allocating capacity when the approximate size is known. Each grow operation copies the entire slice to a new larger array.","func collectIDs(users []User) []int {
+	ids := make([]int, 0, len(users))
+	for _, u := range users {
+		ids = append(ids, u.ID)
+	}
+	return ids
+}","func collectIDs(users []User) []int {
+	var ids []int
+	for _, u := range users {
+		ids = append(ids, u.ID)
+	}
+	return ids
+}",High,"go test -bench=. -benchmem; look at allocs/op to see reduced allocation count"
+3,Allocation,Avoid string concatenation in loops,"strings.Builder, concatenation, loop, allocation","String concatenation with + in a loop creates a new string on every iteration because Go strings are immutable. Each concatenation allocates a new backing array and copies all previous content.","Use strings.Builder for concatenation in loops. It minimizes memory copying and allocations by writing to an internal byte slice.","Do not concatenate strings with the + operator inside loops. This results in O(n^2) time complexity and excessive allocations.","func joinNames(names []string) string {
+	var sb strings.Builder
+	sb.Grow(len(names) * 10)
+	for i, name := range names {
+		if i > 0 {
+			sb.WriteString("", "")
+		}
+		sb.WriteString(name)
+	}
+	return sb.String()
+}","func joinNames(names []string) string {
+	result := """"
+	for i, name := range names {
+		if i > 0 {
+			result += "", ""
+		}
+		result += name
+	}
+	return result
+}",Critical,"go test -bench=BenchmarkJoin -benchmem; observe O(n) vs O(n^2) growth in allocations"
+4,Allocation,bytes.Buffer for building byte output,"bytes.Buffer, io.Writer, allocation","bytes.Buffer implements io.Writer and is ideal for building byte output incrementally. It grows its internal buffer efficiently and avoids repeated allocations.","Use bytes.Buffer when you need an io.Writer for composing byte output. Call Grow() if the approximate size is known to avoid multiple reallocations.","Do not repeatedly create new byte slices and use append to build output when bytes.Buffer provides a cleaner and more efficient approach.","func buildResponse(items []Item) []byte {
+	var buf bytes.Buffer
+	buf.Grow(len(items) * 64)
+	for _, item := range items {
+		fmt.Fprintf(&buf, ""%s: %d\n"", item.Name, item.Value)
+	}
+	return buf.Bytes()
+}","func buildResponse(items []Item) []byte {
+	var result []byte
+	for _, item := range items {
+		line := fmt.Sprintf(""%s: %d\n"", item.Name, item.Value)
+		result = append(result, []byte(line)...)
+	}
+	return result
+}",Medium,"go test -bench=. -benchmem; compare B/op and allocs/op"
+5,Memory,Escape analysis awareness,"escape analysis, heap, stack, go build -gcflags","Understand how Go compiler escape analysis determines whether variables are allocated on the stack or heap. Variables that escape the function scope are heap-allocated, increasing GC pressure.","Write functions that return values instead of pointers when possible. Use go build -gcflags=""-m"" to inspect escape analysis decisions and refactor hot paths accordingly.","Do not blindly return pointers to local variables in performance-critical code without checking escape analysis output. Unnecessary heap allocations add GC overhead.","type Point struct {
+	X, Y float64
+}
+
+func NewPoint(x, y float64) Point {
+	return Point{X: x, Y: y}
+}
+
+func distance(a, b Point) float64 {
+	dx := a.X - b.X
+	dy := a.Y - b.Y
+	return math.Sqrt(dx*dx + dy*dy)
+}","type Point struct {
+	X, Y float64
+}
+
+func NewPoint(x, y float64) *Point {
+	return &Point{X: x, Y: y}
+}
+
+func distance(a, b *Point) float64 {
+	dx := a.X - b.X
+	dy := a.Y - b.Y
+	return math.Sqrt(dx*dx + dy*dy)
+}",High,"go build -gcflags=""-m"" ./...; look for ""escapes to heap"" annotations"
+6,Memory,Stack vs heap allocation,"stack, heap, allocation, value semantics","Stack allocation is orders of magnitude faster than heap allocation because it requires no GC involvement. Small value types that do not escape should remain on the stack.","Prefer value semantics for small structs. Keep structs small so they stay on the stack. Pass small structs by value rather than by pointer.","Do not create pointers to small structs unnecessarily. Pointer indirection forces heap allocation and adds GC tracking overhead for objects that could live on the stack.","type Config struct {
+	Timeout  int
+	Retries  int
+	Verbose  bool
+}
+
+func defaultConfig() Config {
+	return Config{
+		Timeout: 30,
+		Retries: 3,
+		Verbose: false,
+	}
+}","type Config struct {
+	Timeout  int
+	Retries  int
+	Verbose  bool
+}
+
+func defaultConfig() *Config {
+	return &Config{
+		Timeout: 30,
+		Retries: 3,
+		Verbose: false,
+	}
+}",Medium,"go build -gcflags=""-m -l"" to check escape decisions; go test -bench=. -benchmem to compare allocs"
+7,Memory,Pointer indirection cost,"pointer, cache miss, indirection, CPU cache","Pointer-heavy data structures cause CPU cache misses because the data is scattered across the heap. Contiguous value types improve cache locality and iteration performance.","Store values directly in slices rather than pointers when the element size is reasonable. Flat data structures improve CPU cache utilization during iteration.","Do not use slices of pointers ([]*T) for large collections when slices of values ([]T) would work. Pointer chasing causes cache misses that degrade performance significantly.","type Record struct {
+	ID    int
+	Name  string
+	Score float64
+}
+
+func sumScores(records []Record) float64 {
+	total := 0.0
+	for i := range records {
+		total += records[i].Score
+	}
+	return total
+}","type Record struct {
+	ID    int
+	Name  string
+	Score float64
+}
+
+func sumScores(records []*Record) float64 {
+	total := 0.0
+	for _, r := range records {
+		total += r.Score
+	}
+	return total
+}",High,"go test -bench=. -benchmem; use perf stat to measure cache misses on Linux"
+8,Concurrency,Goroutine creation cost awareness,"goroutine, worker pool, concurrency, overhead","Each goroutine has a minimum 2KB stack that grows as needed. Spawning millions of short-lived goroutines adds scheduling overhead and memory pressure. Use worker pools for bounded concurrency.","Use a worker pool pattern with a fixed number of goroutines consuming from a shared channel. This bounds resource usage and reduces scheduling overhead.","Do not spawn an unbounded number of goroutines per request or per item. Millions of goroutines waste memory and overwhelm the scheduler.","func processItems(items []Item) {
+	const workers = 10
+	ch := make(chan Item, len(items))
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			for item := range ch {
+				handle(item)
+			}
+		}()
+	}
+	for _, item := range items {
+		ch <- item
+	}
+	close(ch)
+	wg.Wait()
+}","func processItems(items []Item) {
+	var wg sync.WaitGroup
+	for _, item := range items {
+		wg.Add(1)
+		go func(it Item) {
+			defer wg.Done()
+			handle(it)
+		}(item)
+	}
+	wg.Wait()
+}",High,"runtime.NumGoroutine(); go tool pprof goroutine profile; go test -bench=. -benchmem"
+9,Concurrency,Channel sizing buffered vs unbuffered,"channel, buffered, unbuffered, throughput","Unbuffered channels block both sender and receiver until the other side is ready. Buffered channels allow sends to proceed without blocking until the buffer is full, improving throughput in producer-consumer patterns.","Size buffered channels appropriately based on the expected production rate and consumption rate. Use buffered channels when the producer and consumer operate at different speeds.","Do not use unbuffered channels in high-throughput pipelines where the producer and consumer have different processing speeds. This serializes execution unnecessarily.","func pipeline(input <-chan int) <-chan int {
+	out := make(chan int, 128)
+	go func() {
+		defer close(out)
+		for v := range input {
+			out <- v * 2
+		}
+	}()
+	return out
+}","func pipeline(input <-chan int) <-chan int {
+	out := make(chan int)
+	go func() {
+		defer close(out)
+		for v := range input {
+			out <- v * 2
+		}
+	}()
+	return out
+}",Medium,"go test -bench=. -benchtime=5s; measure throughput ops/sec with varying buffer sizes"
+10,Concurrency,sync.Map for read-heavy workloads,"sync.Map, concurrent map, read-heavy, cache","sync.Map is optimized for cases where keys are stable and reads vastly outnumber writes. It avoids lock contention on reads by using an atomic read path with a separate dirty map for writes.","Use sync.Map when the map is read-heavy with infrequent writes, such as caches or configuration stores. It provides lock-free reads for stable keys.","Do not use sync.Map for write-heavy workloads. A regular map with sync.RWMutex performs better when writes are frequent because sync.Map has overhead for promoting dirty entries.","var cache sync.Map
+
+func getUser(id string) (*User, bool) {
+	val, ok := cache.Load(id)
+	if !ok {
+		return nil, false
+	}
+	return val.(*User), true
+}
+
+func setUser(id string, u *User) {
+	cache.Store(id, u)
+}","type SafeMap struct {
+	mu sync.Mutex
+	m  map[string]*User
+}
+
+func (s *SafeMap) getUser(id string) (*User, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, ok := s.m[id]
+	return u, ok
+}",Medium,"go test -bench=. -cpu=1,4,8; compare with sync.RWMutex under read-heavy load"
+11,Concurrency,Atomic operations vs mutex,"atomic, mutex, sync/atomic, lock-free","For simple counters and flags, atomic operations are significantly faster than mutexes because they use CPU-level instructions without OS-level locking or goroutine parking.","Use sync/atomic for simple numeric counters, boolean flags, and pointer swaps. Atomic operations avoid context switches and lock contention.","Do not use a full sync.Mutex to protect a single integer counter or boolean flag. The mutex overhead is disproportionate for such simple operations.","type Counter struct {
+	count atomic.Int64
+}
+
+func (c *Counter) Increment() {
+	c.count.Add(1)
+}
+
+func (c *Counter) Value() int64 {
+	return c.count.Load()
+}","type Counter struct {
+	mu    sync.Mutex
+	count int64
+}
+
+func (c *Counter) Increment() {
+	c.mu.Lock()
+	c.count++
+	c.mu.Unlock()
+}
+
+func (c *Counter) Value() int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.count
+}",Medium,"go test -bench=. -cpu=1,4,8,16; compare ns/op for atomic vs mutex under contention"
+12,IO,Buffered IO with bufio,"bufio, Reader, Writer, IO performance","Reading or writing one byte at a time from disk or network is extremely slow due to syscall overhead. bufio.Reader and bufio.Writer batch IO operations into larger chunks, dramatically reducing syscall count.","Wrap os.File or net.Conn with bufio.NewReader or bufio.NewWriter with an appropriate buffer size. Always call Flush on buffered writers before closing.","Do not read or write files byte-by-byte or line-by-line without buffering. Each small read or write triggers a system call with significant overhead.","func readLines(path string) ([]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	var lines []string
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+	return lines, scanner.Err()
+}","func readLines(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	lines := strings.Split(string(data), ""\n"")
+	return lines, nil
+}",High,"go test -bench=. -benchmem; use strace or dtrace to count syscalls; compare wall time"
+13,IO,io.Copy for stream transfer,"io.Copy, stream, zero-copy, transfer","io.Copy efficiently transfers data between an io.Reader and io.Writer using a shared buffer. It avoids loading the entire content into memory and leverages OS-level optimizations like sendfile when available.","Use io.Copy or io.CopyBuffer for transferring data between streams. This handles large files efficiently without loading them entirely into memory.","Do not read an entire file or response body into memory with io.ReadAll when you only need to transfer it to another writer. This wastes memory for large payloads.","func downloadToFile(url string, dest string) error {
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	f, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = io.Copy(f, resp.Body)
+	return err
+}","func downloadToFile(url string, dest string) error {
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dest, data, 0644)
+}",Critical,"go test -bench=. -benchmem; monitor RSS memory usage with large files; compare B/op"
+14,IO,HTTP connection pooling,"http.Transport, connection pool, keep-alive, reuse","Creating a new http.Client or http.Transport per request prevents TCP connection reuse. Reusing connections avoids the overhead of TCP handshake and TLS negotiation on every request.","Reuse a single http.Client with a properly configured http.Transport. Set MaxIdleConnsPerHost and IdleConnTimeout to match your workload.","Do not create a new http.Client for every request. Do not forget to close response bodies, as unclosed bodies prevent connection reuse.","var client = &http.Client{
+	Transport: &http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 10,
+		IdleConnTimeout:     90 * time.Second,
+	},
+	Timeout: 30 * time.Second,
+}
+
+func fetchData(url string) ([]byte, error) {
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(resp.Body)
+}","func fetchData(url string) ([]byte, error) {
+	client := &http.Client{}
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(resp.Body)
+}",Critical,"go test -bench=.; use netstat to observe TIME_WAIT connections; measure latency per request"
+15,JSON,encoding/json vs easyjson performance,"encoding/json, easyjson, marshal, unmarshal","The standard encoding/json package uses reflection at runtime, which is slow for high-throughput services. Code generation tools like easyjson produce type-specific marshalers that avoid reflection entirely.","Use code generation based JSON libraries like easyjson or go-json for performance-critical JSON serialization. They generate type-specific code that avoids reflection overhead.","Do not rely solely on encoding/json in hot paths handling thousands of requests per second. The reflection overhead becomes a significant bottleneck at scale.","//go:generate easyjson -all model.go
+
+//easyjson:json
+type APIResponse struct {
+	Status  string  `json:""status""`
+	Data    []Item  `json:""data""`
+	Count   int     `json:""count""`
+}
+
+func handleRequest(w http.ResponseWriter, r *http.Request) {
+	resp := APIResponse{Status: ""ok"", Count: 42}
+	data, _ := resp.MarshalJSON()
+	w.Write(data)
+}","type APIResponse struct {
+	Status  string  `json:""status""`
+	Data    []Item  `json:""data""`
+	Count   int     `json:""count""`
+}
+
+func handleRequest(w http.ResponseWriter, r *http.Request) {
+	resp := APIResponse{Status: ""ok"", Count: 42}
+	data, _ := json.Marshal(resp)
+	w.Write(data)
+}",High,"go test -bench=BenchmarkMarshal -benchmem; compare ns/op and allocs/op between libraries"
+16,JSON,Struct tags optimization,"json, struct tags, omitempty, marshaling","Using omitempty on struct tags prevents marshaling zero-value fields, reducing payload size. Choosing short JSON key names reduces bandwidth usage for high-volume APIs.","Use omitempty for optional fields to reduce JSON payload size. Order struct fields from largest to smallest to minimize padding and improve cache performance.","Do not marshal large structs with many zero-value fields without omitempty. Sending unnecessary null or zero fields wastes bandwidth and parsing time.","type Event struct {
+	ID        int64   `json:""id""`
+	Type      string  `json:""type""`
+	Timestamp int64   `json:""ts""`
+	UserID    int64   `json:""uid,omitempty""`
+	Metadata  string  `json:""meta,omitempty""`
+	Tags      []string `json:""tags,omitempty""`
+}
+
+func encodeEvent(e Event) ([]byte, error) {
+	return json.Marshal(e)
+}","type Event struct {
+	ID        int64    `json:""id""`
+	Type      string   `json:""type""`
+	Timestamp int64    `json:""timestamp""`
+	UserID    int64    `json:""user_id""`
+	Metadata  string   `json:""metadata""`
+	Tags      []string `json:""tags""`
+}
+
+func encodeEvent(e Event) ([]byte, error) {
+	return json.Marshal(e)
+}",Low,"Compare JSON payload sizes with and without omitempty; go test -bench=. -benchmem"
+17,String,strings.Builder for concatenation,"strings.Builder, concatenation, performance, WriteString","strings.Builder uses an internal byte slice that grows efficiently. Unlike string concatenation with +, it avoids creating intermediate string copies on each append operation.","Use strings.Builder with Grow() for known sizes. Call WriteString for each piece. This is the idiomatic and fastest way to build strings in Go.","Do not use fmt.Sprintf or string concatenation with + in performance-critical code paths. Both create unnecessary intermediate allocations.","func formatRecord(fields []string) string {
+	var b strings.Builder
+	b.Grow(len(fields) * 20)
+	for i, f := range fields {
+		if i > 0 {
+			b.WriteByte('|')
+		}
+		b.WriteString(f)
+	}
+	return b.String()
+}","func formatRecord(fields []string) string {
+	result := """"
+	for i, f := range fields {
+		if i > 0 {
+			result = result + ""|"" + f
+		} else {
+			result = f
+		}
+	}
+	return result
+}",High,"go test -bench=BenchmarkFormat -benchmem; compare allocs/op and ns/op"
+18,String,String interning and byte slice reuse,"string, interning, byte slice, reuse, conversion","Converting between string and []byte creates a copy each time. In hot loops processing the same strings repeatedly, this causes excessive allocations. Reusing byte slices avoids repeated allocation.","Reuse byte slices across iterations using a buffer. Use unsafe.String or unsafe.Slice for zero-copy conversions only when the data is guaranteed not to be mutated.","Do not convert between string and []byte repeatedly inside tight loops. Each conversion allocates a new backing array and copies the data.","func processLines(r io.Reader) error {
+	scanner := bufio.NewScanner(r)
+	buf := make([]byte, 0, 4096)
+	scanner.Buffer(buf, 4096)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) > 0 && line[0] == '#' {
+			continue
+		}
+		processBytes(line)
+	}
+	return scanner.Err()
+}","func processLines(r io.Reader) error {
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if len(line) > 0 && line[0] == '#' {
+			continue
+		}
+		processBytes([]byte(line))
+	}
+	return scanner.Err()
+}",Medium,"go test -bench=. -benchmem; compare B/op to see reduced allocation bytes"
+19,GC,GOGC tuning,"GOGC, garbage collection, tuning, GOMEMLIMIT","GOGC controls how aggressively the garbage collector runs. The default value of 100 means GC triggers when heap grows by 100% since last collection. Higher values reduce GC frequency at the cost of more memory usage.","Tune GOGC based on your application profile. For latency-sensitive services, increase GOGC (e.g., 200-400) and set GOMEMLIMIT to cap memory. Use runtime/debug.SetGCPercent for dynamic tuning.","Do not leave GOGC at default for all workloads. Memory-constrained environments may need lower values, while latency-sensitive services benefit from higher values with GOMEMLIMIT set.","func main() {
+	debug.SetGCPercent(200)
+	debug.SetMemoryLimit(2 * 1024 * 1024 * 1024)
+	log.Println(""GC tuned: GOGC=200, GOMEMLIMIT=2GiB"")
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}","func main() {
+	// Uses default GOGC=100 with no memory limit
+	// GC runs too frequently under high allocation rate
+	// causing excessive CPU usage for GC
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}",High,"GODEBUG=gctrace=1 ./app; monitor GC pause times and frequency; runtime.ReadMemStats()"
+20,GC,Reduce pointer-heavy structures,"GC, pointer, struct layout, value types","The Go garbage collector must scan every pointer in live objects to determine reachability. Structures with many pointers increase GC scan time. Using value types and flat data layouts reduces GC overhead.","Use flat struct layouts with value types instead of pointers. Store indices into slices instead of pointers. Use arrays of structs rather than structs of pointer-laden fields.","Do not create deeply nested pointer-heavy data structures in performance-critical code. Each pointer is an additional root the GC must trace during marking.","type Particle struct {
+	X, Y, Z    float64
+	VX, VY, VZ float64
+	Mass       float64
+}
+
+type Simulation struct {
+	Particles []Particle
+	Count     int
+}","type Particle struct {
+	X, Y, Z    *float64
+	VX, VY, VZ *float64
+	Mass       *float64
+}
+
+type Simulation struct {
+	Particles []*Particle
+	Count     int
+}",High,"GODEBUG=gctrace=1; runtime.ReadMemStats() to compare GC pause duration and total scan work"
+21,Profiling,pprof CPU profiling,"pprof, CPU, profiling, runtime/pprof","CPU profiling identifies which functions consume the most CPU time. The Go runtime samples the call stack at regular intervals and records which functions are executing, enabling data-driven optimization.","Import net/http/pprof in your application and expose it on a debug endpoint. Use go tool pprof to analyze CPU profiles and focus optimization on the hottest functions.","Do not optimize code without profiling first. Guessing which functions are slow leads to wasted effort on code that is not actually a bottleneck.","import (
+	""log""
+	""net/http""
+	_ ""net/http/pprof""
+)
+
+func main() {
+	go func() {
+		log.Println(http.ListenAndServe(""localhost:6060"", nil))
+	}()
+	runApplication()
+}
+
+// Profile with:
+// go tool pprof http://localhost:6060/debug/pprof/profile?seconds=30","func main() {
+	start := time.Now()
+	runApplication()
+	elapsed := time.Since(start)
+	fmt.Printf(""Total time: %s\n"", elapsed)
+	// No way to identify which functions are slow
+	// Only measures total elapsed wall time
+}",Critical,"go tool pprof http://localhost:6060/debug/pprof/profile?seconds=30; analyze top and flamegraph"
+22,Profiling,Memory profiling,"pprof, memory, heap, allocs, profiling","Memory profiling tracks heap allocations to identify which code paths allocate the most memory. This helps reduce GC pressure and overall memory usage by pinpointing allocation-heavy functions.","Use go tool pprof with the allocs or heap profile to identify top allocators. Focus on reducing allocations in hot paths identified by the allocs profile.","Do not ignore memory profiles when debugging high GC CPU usage. High allocation rates directly cause frequent GC cycles and increased latency.","import (
+	""os""
+	""runtime""
+	""runtime/pprof""
+)
+
+func captureHeapProfile() error {
+	f, err := os.Create(""heap.prof"")
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	runtime.GC()
+	return pprof.WriteHeapProfile(f)
+}
+
+// Analyze with:
+// go tool pprof -alloc_space heap.prof","func debugMemory() {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	fmt.Printf(""Alloc: %d MB\n"", m.Alloc/1024/1024)
+	fmt.Printf(""Sys: %d MB\n"", m.Sys/1024/1024)
+	// Only shows aggregate numbers
+	// Cannot identify which functions allocate most
+}",Critical,"go tool pprof -alloc_space -alloc_objects heap.prof; use top and list commands"
+23,Compilation,Build flags for smaller binaries,"ldflags, build, binary size, strip","Go binaries include debug information and symbol tables by default. Using linker flags to strip this data and omit the symbol table reduces binary size significantly, which improves deployment times.","Use -ldflags=""-s -w"" to strip debug information and symbol tables. Consider using upx for further compression of deployment binaries.","Do not deploy unstripped binaries to production when binary size matters. Debug symbols and DWARF info can add 20-30% to binary size.","// Build command for production
+// go build -ldflags=""-s -w"" -trimpath -o app ./cmd/server
+//
+// Makefile example:
+// build:
+//     go build -ldflags=""-s -w -X main.version=$(VERSION)"" \
+//         -trimpath -o bin/app ./cmd/server
+
+package main
+
+var version string
+
+func main() {
+	fmt.Println(""Version:"", version)
+	run()
+}","// Build command with defaults
+// go build -o app ./cmd/server
+//
+// Includes full debug info, symbol table, and DWARF
+// Binary is 20-30% larger than necessary
+
+package main
+
+func main() {
+	fmt.Println(""Version: dev"")
+	run()
+}",Low,"ls -lh on binaries before and after; go build with and without ldflags; compare sizes"
+24,Database,Prepared statements,"database/sql, prepared statement, query plan, reuse","Prepared statements allow the database to parse and plan a query once and execute it many times with different parameters. This avoids repeated parsing overhead and enables query plan caching.","Use db.Prepare once and reuse the *sql.Stmt across multiple calls. Prepared statements also provide protection against SQL injection by separating query logic from parameters.","Do not call db.Query with string formatting to build SQL queries on every request. This forces the database to parse and plan each query from scratch and risks SQL injection.","var getUserStmt *sql.Stmt
+
+func initDB(db *sql.DB) error {
+	var err error
+	getUserStmt, err = db.Prepare(
+		""SELECT id, name, email FROM users WHERE id = $1"",
+	)
+	return err
+}
+
+func getUser(ctx context.Context, id int64) (*User, error) {
+	var u User
+	err := getUserStmt.QueryRowContext(ctx, id).Scan(
+		&u.ID, &u.Name, &u.Email,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}","func getUser(ctx context.Context, db *sql.DB, id int64) (*User, error) {
+	query := fmt.Sprintf(
+		""SELECT id, name, email FROM users WHERE id = %d"", id,
+	)
+	var u User
+	err := db.QueryRowContext(ctx, query).Scan(
+		&u.ID, &u.Name, &u.Email,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}",High,"go test -bench=. comparing prepared vs unprepared; monitor database query plan cache hit rate"
+25,HTTP,http.Client reuse and transport tuning,"http.Client, Transport, connection pool, timeout","The default http.Transport has conservative connection pool settings. Tuning MaxIdleConnsPerHost, setting proper timeouts, and disabling keep-alive only when necessary ensures optimal HTTP client performance.","Create a single http.Client with a tuned Transport at package level. Set appropriate timeouts for dial, TLS handshake, response header, and overall request. Read and close all response bodies.","Do not use http.DefaultClient in production. It has no timeout set, which means requests can hang indefinitely. Do not create new transports per request.","var httpClient = &http.Client{
+	Timeout: 30 * time.Second,
+	Transport: &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   5 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   20,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:  5 * time.Second,
+		ResponseHeaderTimeout: 10 * time.Second,
+	},
+}
+
+func callAPI(ctx context.Context, url string) (*Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var result Response
+	return &result, json.NewDecoder(resp.Body).Decode(&result)
+}","func callAPI(url string) (*Response, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var result Response
+	return &result, json.NewDecoder(resp.Body).Decode(&result)
+}",Critical,"go test -bench=. with concurrent requests; monitor TCP connection count with netstat; measure p99 latency"

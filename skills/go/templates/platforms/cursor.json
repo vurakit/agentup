@@ -1,0 +1,34 @@
+{
+  "platform": "cursor",
+  "name": "GoSkill",
+  "version": "1.0.0",
+  "description": "AI-powered Go intelligence toolkit for Cursor",
+  "install_path": ".cursor/skills/goskill",
+  "config_file": ".cursorrules",
+  "search_command": "python3 .cursor/skills/goskill/scripts/search.py",
+  "features": {
+    "domain_search": true,
+    "stack_search": true,
+    "arch_system": true,
+    "auto_detect": true,
+    "persist": true
+  },
+  "domains": [
+    "pattern", "package", "error", "perf", "test",
+    "concurrency", "interface", "arch", "idiom", "anti",
+    "tooling", "module"
+  ],
+  "stacks": [
+    "web-gin", "web-echo", "web-fiber", "web-stdlib", "cli",
+    "grpc", "database", "microservice", "cloud-native", "data-pipeline"
+  ],
+  "setup": {
+    "copy_files": [
+      { "from": "src/goskill", "to": ".cursor/skills/goskill" }
+    ],
+    "create_config": {
+      "file": ".cursorrules",
+      "template": "templates/base/skill-content.md"
+    }
+  }
+}

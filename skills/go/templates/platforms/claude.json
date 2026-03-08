@@ -1,0 +1,34 @@
+{
+  "platform": "claude",
+  "name": "GoSkill",
+  "version": "1.0.0",
+  "description": "AI-powered Go intelligence toolkit for Claude Code",
+  "install_path": ".claude/skills/goskill",
+  "config_file": "CLAUDE.md",
+  "search_command": "python3 src/goskill/scripts/search.py",
+  "features": {
+    "domain_search": true,
+    "stack_search": true,
+    "arch_system": true,
+    "auto_detect": true,
+    "persist": true
+  },
+  "domains": [
+    "pattern", "package", "error", "perf", "test",
+    "concurrency", "interface", "arch", "idiom", "anti",
+    "tooling", "module"
+  ],
+  "stacks": [
+    "web-gin", "web-echo", "web-fiber", "web-stdlib", "cli",
+    "grpc", "database", "microservice", "cloud-native", "data-pipeline"
+  ],
+  "setup": {
+    "copy_files": [
+      { "from": "src/goskill", "to": ".claude/skills/goskill" }
+    ],
+    "create_config": {
+      "file": "CLAUDE.md",
+      "template": "templates/base/skill-content.md"
+    }
+  }
+}

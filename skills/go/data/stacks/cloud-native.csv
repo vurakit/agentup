@@ -1,0 +1,451 @@
+No,Category,Guideline,Description,Do,Dont,Code Good,Code Bad,Severity,Docs URL
+1,Dockerfile Multi-Stage,Use multi-stage builds with distroless final image,"Separate build and runtime stages to minimize image size, attack surface, and build cache efficiency",Use a builder stage with golang image and copy only the binary to a distroless or scratch final stage,Ship the full Go toolchain and source code in the production image,"# syntax=docker/dockerfile:1
+FROM golang:1.22 AS builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags=""-s -w"" -o /server ./cmd/server
+
+FROM gcr.io/distroless/static:nonroot
+COPY --from=builder /server /server
+USER nonroot:nonroot
+ENTRYPOINT [""/server""]","FROM golang:1.22
+WORKDIR /app
+COPY . .
+RUN go build -o /server ./cmd/server
+ENTRYPOINT [""/server""]",critical,https://docs.docker.com/build/building/multi-stage/
+2,Distroless Images,Use gcr.io/distroless/static for Go binaries,"Distroless images contain only the application and its runtime dependencies, no shell, no package manager, reducing CVE exposure",Use gcr.io/distroless/static for statically linked Go binaries or gcr.io/distroless/base for CGO-enabled binaries,Use alpine or ubuntu as base images for production Go services that do not need a shell,"FROM gcr.io/distroless/static:nonroot
+COPY --from=builder /app/server /server
+USER nonroot:nonroot
+ENTRYPOINT [""/server""]","FROM ubuntu:22.04
+RUN apt-get update && apt-get install -y ca-certificates
+COPY server /server
+ENTRYPOINT [""/server""]",high,https://github.com/GoogleContainerTools/distroless
+3,Build Flags,Use CGO_ENABLED=0 and linker flags for production builds,"Disable CGO for fully static binaries, strip debug info with ldflags to reduce binary size",Set CGO_ENABLED=0 and use -ldflags with -s -w flags for production builds,Build with default CGO enabled and debug symbols in production containers,"RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+  -ldflags=""-s -w -X main.version=$(git describe --tags)"" \
+  -trimpath \
+  -o /app/server ./cmd/server","RUN go build -o /app/server ./cmd/server",high,https://pkg.go.dev/cmd/link
+4,Health Probes,Implement /healthz and /readyz HTTP endpoints,"Kubernetes uses liveness and readiness probes to manage pod lifecycle; /healthz checks process health, /readyz checks if ready to serve traffic",Implement separate liveness and readiness endpoints that check relevant dependencies,Use a single health endpoint for both liveness and readiness or omit probes entirely,"mux := http.NewServeMux()
+mux.HandleFunc(""/healthz"", func(w http.ResponseWriter, r *http.Request) {
+    w.WriteHeader(http.StatusOK)
+    w.Write([]byte(""ok""))
+})
+mux.HandleFunc(""/readyz"", func(w http.ResponseWriter, r *http.Request) {
+    if err := db.PingContext(r.Context()); err != nil {
+        w.WriteHeader(http.StatusServiceUnavailable)
+        return
+    }
+    w.WriteHeader(http.StatusOK)
+})","// No health endpoints defined
+http.ListenAndServe("":8080"", handler)",critical,https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
+5,Readiness Probes,Check dependent services in readiness probe,"Readiness probes should verify that all dependencies (database, cache, message broker) are reachable before accepting traffic",Check connectivity to all critical dependencies in the readiness handler,Return 200 from readiness without verifying downstream dependencies,"func readinessHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+        defer cancel()
+        if err := db.PingContext(ctx); err != nil {
+            http.Error(w, ""db not ready"", http.StatusServiceUnavailable)
+            return
+        }
+        if err := rdb.Ping(ctx).Err(); err != nil {
+            http.Error(w, ""redis not ready"", http.StatusServiceUnavailable)
+            return
+        }
+        w.WriteHeader(http.StatusOK)
+    }
+}","func readinessHandler() http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        w.WriteHeader(http.StatusOK)
+    }
+}",high,https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/#container-probes
+6,Graceful Shutdown,Handle SIGTERM for graceful shutdown in Kubernetes,"When Kubernetes sends SIGTERM, the application should stop accepting new requests, finish in-flight requests, close connections, and exit cleanly within the terminationGracePeriodSeconds window",Use signal.NotifyContext or signal.Notify to catch SIGTERM and shut down HTTP server gracefully,Call os.Exit or log.Fatal immediately on shutdown signal without draining connections,"ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+defer stop()
+
+srv := &http.Server{Addr: "":8080"", Handler: mux}
+go func() {
+    if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+        log.Fatalf(""listen: %v"", err)
+    }
+}()
+<-ctx.Done()
+shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+srv.Shutdown(shutdownCtx)","srv := &http.Server{Addr: "":8080"", Handler: mux}
+log.Fatal(srv.ListenAndServe())
+// SIGTERM kills process immediately, dropping in-flight requests",critical,https://pkg.go.dev/os/signal#NotifyContext
+7,K8s ConfigMap,Mount configuration via ConfigMap volumes or environment variables,"Use Kubernetes ConfigMaps to externalize configuration from the container image, allowing the same image across environments",Mount ConfigMaps as files or inject as environment variables and read them at startup,Hardcode configuration values or bake environment-specific config into the container image,"// Read config file mounted from ConfigMap
+data, err := os.ReadFile(""/etc/config/app.yaml"")
+if err != nil {
+    log.Fatalf(""reading config: %v"", err)
+}
+var cfg AppConfig
+if err := yaml.Unmarshal(data, &cfg); err != nil {
+    log.Fatalf(""parsing config: %v"", err)
+}","// Hardcoded configuration
+cfg := AppConfig{
+    DatabaseHost: ""db.production.internal"",
+    CacheHost:    ""redis.production.internal"",
+    LogLevel:     ""info"",
+}",medium,https://kubernetes.io/docs/concepts/configuration/configmap/
+8,K8s Secrets,Mount secrets from Kubernetes Secret volumes,"Use Kubernetes Secrets for sensitive data like database passwords, API keys, and TLS certificates, never bake them into images or ConfigMaps",Mount secrets as files or environment variables from Kubernetes Secret objects,Hardcode secrets in code or store them in ConfigMaps or container images,"// Read secret mounted from Kubernetes Secret volume
+password, err := os.ReadFile(""/var/run/secrets/db/password"")
+if err != nil {
+    log.Fatalf(""reading secret: %v"", err)
+}
+dsn := fmt.Sprintf(""postgres://app:%s@db:5432/mydb?sslmode=require"", strings.TrimSpace(string(password)))","// Hardcoded secret in source code
+dsn := ""postgres://app:supersecret@db:5432/mydb""",critical,https://kubernetes.io/docs/concepts/configuration/secret/
+9,Resource Limits,Set CPU and memory resource requests and limits,"Define resource requests for scheduling and limits for protection against runaway processes in Kubernetes pod specs",Set both requests and limits for CPU and memory based on load testing benchmarks,Deploy pods without resource requests or limits allowing unbounded resource consumption,"# deployment.yaml
+resources:
+  requests:
+    cpu: ""100m""
+    memory: ""128Mi""
+  limits:
+    cpu: ""500m""
+    memory: ""512Mi""","# deployment.yaml
+# No resource limits defined
+containers:
+  - name: app
+    image: myapp:latest",high,https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+10,Horizontal Pod Autoscaler,Configure HPA for automatic scaling based on metrics,"Use Kubernetes HPA to automatically scale the number of pod replicas based on CPU utilization, memory usage, or custom metrics",Define HPA with appropriate min/max replicas and target utilization based on observed performance,Manually scale deployments or set fixed replica counts without autoscaling,"# hpa.yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: go-service
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: go-service
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70","# Fixed replicas, no autoscaling
+apiVersion: apps/v1
+kind: Deployment
+spec:
+  replicas: 5",medium,https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/
+11,K8s Operator Basics,Use controller-runtime for building Kubernetes operators,"The controller-runtime library provides abstractions for building Kubernetes operators including managers, controllers, and reconcilers",Use controller-runtime manager and controller patterns to watch and reconcile custom resources,Write raw client-go informer and workqueue code when controller-runtime handles the boilerplate,"import (
+    ""sigs.k8s.io/controller-runtime""
+    ""sigs.k8s.io/controller-runtime/pkg/manager""
+)
+
+mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), manager.Options{
+    Scheme: scheme,
+    LeaderElection: true,
+    LeaderElectionID: ""my-operator-lock"",
+})
+if err != nil {
+    log.Fatalf(""creating manager: %v"", err)
+}
+if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+    log.Fatalf(""running manager: %v"", err)
+}","// Manual informer and workqueue setup
+informer := cache.NewInformer(lw, &v1.Pod{}, 0, cache.ResourceEventHandlerFuncs{
+    AddFunc: func(obj interface{}) { queue.Add(obj) },
+})
+go informer.Run(stopCh)
+// 100+ lines of boilerplate...",medium,https://pkg.go.dev/sigs.k8s.io/controller-runtime
+12,Custom Resource Definitions,Define CRDs using kubebuilder markers,"Use kubebuilder markers to generate CRD manifests, deepcopy methods, and RBAC rules from Go type definitions",Define API types with kubebuilder validation markers and generate manifests with controller-gen,Write CRD YAML manifests by hand and maintain them separately from Go types,"// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name=""Status"",type=string,JSONPath=`.status.phase`
+type MyApp struct {
+    metav1.TypeMeta   `json:"",inline""`
+    metav1.ObjectMeta `json:""metadata,omitempty""`
+    Spec   MyAppSpec   `json:""spec,omitempty""`
+    Status MyAppStatus `json:""status,omitempty""`
+}
+
+// +kubebuilder:validation:Enum=small;medium;large
+type Size string
+
+type MyAppSpec struct {
+    // +kubebuilder:validation:Minimum=1
+    Replicas int32  `json:""replicas""`
+    Size     Size   `json:""size""`
+}","// Manually written CRD YAML, not synced with Go types
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: myapps.example.com
+# Manually maintained, drifts from code...",medium,https://book.kubebuilder.io/cronjob-tutorial/new-api
+13,Reconciler Pattern,Implement idempotent Reconcile functions,"The reconciler should compare desired state with actual state and make changes to converge, returning requeue if needed",Make Reconcile idempotent and return ctrl.Result with appropriate requeue behavior,Perform non-idempotent operations or ignore errors in the reconcile loop,"func (r *MyAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+    log := log.FromContext(ctx)
+    var app myv1.MyApp
+    if err := r.Get(ctx, req.NamespacedName, &app); err != nil {
+        return ctrl.Result{}, client.IgnoreNotFound(err)
+    }
+    desired := r.desiredDeployment(&app)
+    var current appsv1.Deployment
+    err := r.Get(ctx, client.ObjectKeyFromObject(desired), &current)
+    if errors.IsNotFound(err) {
+        if err := r.Create(ctx, desired); err != nil {
+            return ctrl.Result{}, err
+        }
+        return ctrl.Result{}, nil
+    }
+    if err != nil {
+        return ctrl.Result{}, err
+    }
+    current.Spec = desired.Spec
+    return ctrl.Result{}, r.Update(ctx, &current)
+}","func (r *MyAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+    var app myv1.MyApp
+    r.Get(ctx, req.NamespacedName, &app) // error ignored
+    r.Create(ctx, r.desiredDeployment(&app)) // creates duplicates
+    return ctrl.Result{}, nil
+}",high,https://pkg.go.dev/sigs.k8s.io/controller-runtime/pkg/reconcile
+14,Leader Election,Enable leader election for singleton operators,"When running multiple replicas of an operator, leader election ensures only one instance actively reconciles to prevent conflicts",Enable leader election in the controller-runtime manager options,Run multiple operator replicas without leader election causing duplicate reconciliations,"mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), manager.Options{
+    LeaderElection:          true,
+    LeaderElectionID:        ""my-operator-lock"",
+    LeaderElectionNamespace: ""my-operator-system"",
+    LeaseDuration:           &leaseDuration,
+    RenewDeadline:           &renewDeadline,
+    RetryPeriod:             &retryPeriod,
+})
+if err != nil {
+    log.Fatalf(""unable to create manager: %v"", err)
+}","mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), manager.Options{
+    // No leader election - all replicas reconcile simultaneously
+})
+// Multiple replicas fight over the same resources",high,https://pkg.go.dev/sigs.k8s.io/controller-runtime/pkg/leaderelection
+15,Helm Charts,Structure Helm charts for Go microservices,"Use Helm to template Kubernetes manifests for Go services, enabling consistent deployments across environments with configurable values",Create a well-structured Helm chart with configurable values for image tag and resource limits and probes,Copy-paste raw YAML manifests and manually edit values for each environment,"# values.yaml
+replicaCount: 2
+image:
+  repository: myregistry/go-service
+  tag: v1.0.0
+  pullPolicy: IfNotPresent
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+probes:
+  liveness:
+    path: /healthz
+  readiness:
+    path: /readyz","# dev-deployment.yaml (copy-pasted for each env)
+image: myregistry/go-service:v1.0.0
+# staging-deployment.yaml (another copy)
+image: myregistry/go-service:v1.0.0
+# Values manually changed in each file",medium,https://helm.sh/docs/chart_best_practices/
+16,Prometheus Metrics,Expose /metrics endpoint with prometheus/client_golang,"Use the Prometheus client library to expose application metrics at /metrics for scraping by Prometheus, including custom business metrics",Register custom metrics and expose them via promhttp.Handler on a separate port or path,Log metrics to stdout or implement custom metrics formats instead of using the Prometheus standard,"import (
+    ""github.com/prometheus/client_golang/prometheus""
+    ""github.com/prometheus/client_golang/prometheus/promauto""
+    ""github.com/prometheus/client_golang/prometheus/promhttp""
+)
+
+var (
+    requestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+        Name: ""http_requests_total"",
+        Help: ""Total number of HTTP requests"",
+    }, []string{""method"", ""path"", ""status""})
+
+    requestDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+        Name:    ""http_request_duration_seconds"",
+        Help:    ""HTTP request duration in seconds"",
+        Buckets: prometheus.DefBuckets,
+    }, []string{""method"", ""path""})
+)
+
+mux.Handle(""/metrics"", promhttp.Handler())","// Custom metrics format, not compatible with Prometheus
+mux.HandleFunc(""/metrics"", func(w http.ResponseWriter, r *http.Request) {
+    fmt.Fprintf(w, ""requests: %d\nlatency: %f\n"", count, latency)
+})",high,https://pkg.go.dev/github.com/prometheus/client_golang/prometheus
+17,OpenTelemetry Traces,Instrument services with OpenTelemetry and OTLP exporter,"Use OpenTelemetry SDK to produce distributed traces and export them via OTLP to backends like Jaeger, Tempo, or Datadog",Initialize a TracerProvider with OTLP exporter and propagate trace context across service boundaries,Use ad-hoc logging for tracing or implement vendor-specific tracing libraries directly,"import (
+    ""go.opentelemetry.io/otel""
+    ""go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc""
+    ""go.opentelemetry.io/otel/sdk/trace""
+    ""go.opentelemetry.io/otel/sdk/resource""
+    semconv ""go.opentelemetry.io/otel/semconv/v1.21.0""
+)
+
+exporter, err := otlptracegrpc.New(ctx, otlptracegrpc.WithEndpoint(""otel-collector:4317""), otlptracegrpc.WithInsecure())
+if err != nil {
+    log.Fatalf(""creating exporter: %v"", err)
+}
+tp := trace.NewTracerProvider(
+    trace.WithBatcher(exporter),
+    trace.WithResource(resource.NewWithAttributes(semconv.SchemaURL, semconv.ServiceName(""my-service""))),
+)
+otel.SetTracerProvider(tp)
+defer tp.Shutdown(ctx)","// Ad-hoc trace logging
+log.Printf(""[TRACE] request_id=%s start handler"", reqID)
+// ... handler logic ...
+log.Printf(""[TRACE] request_id=%s end handler duration=%v"", reqID, time.Since(start))",high,https://pkg.go.dev/go.opentelemetry.io/otel
+18,Structured Logging,Use structured JSON logging for Kubernetes environments,"Structured JSON logs enable efficient parsing by log aggregators like Fluentd, Loki, and Elasticsearch in Kubernetes clusters",Use log/slog or zerolog for structured JSON logging with consistent field names,Use fmt.Println or log.Printf with unstructured text messages in containerized services,"import ""log/slog""
+
+logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+    Level: slog.LevelInfo,
+}))
+slog.SetDefault(logger)
+
+slog.Info(""request handled"",
+    slog.String(""method"", r.Method),
+    slog.String(""path"", r.URL.Path),
+    slog.Int(""status"", statusCode),
+    slog.Duration(""duration"", elapsed),
+    slog.String(""trace_id"", traceID),
+)","log.Printf(""handled %s %s in %v with status %d"", r.Method, r.URL.Path, elapsed, statusCode)
+// Unstructured text, hard to parse and filter in log aggregators",medium,https://pkg.go.dev/log/slog
+19,Config from Environment,Read configuration from environment variables,"Follow the twelve-factor app methodology by reading configuration from environment variables, with sensible defaults for development",Use os.Getenv with fallback defaults or a library like caarlos0/env for typed config parsing,Hardcode configuration values or read from files only without environment variable override,"type Config struct {
+    Port        string `env:""PORT"" envDefault:""8080""`
+    DatabaseURL string `env:""DATABASE_URL,required""`
+    LogLevel    string `env:""LOG_LEVEL"" envDefault:""info""`
+    MaxWorkers  int    `env:""MAX_WORKERS"" envDefault:""4""`
+}
+
+func LoadConfig() (*Config, error) {
+    var cfg Config
+    if err := env.Parse(&cfg); err != nil {
+        return nil, fmt.Errorf(""parsing config: %w"", err)
+    }
+    return &cfg, nil
+}","const (
+    port        = ""8080""
+    databaseURL = ""postgres://localhost:5432/mydb""
+    logLevel    = ""info""
+    maxWorkers  = 4
+)",medium,https://12factor.net/config
+20,Init Containers,Use init containers for database migrations and setup tasks,"Run database migrations, schema validation, or dependency checks in init containers before the main application starts",Run migrations in an init container using a migration tool like golang-migrate,Run migrations on application startup which can cause race conditions with multiple replicas,"# deployment.yaml
+initContainers:
+  - name: migrate
+    image: migrate/migrate:v4
+    command:
+      - migrate
+      - -path=/migrations
+      - -database=$(DATABASE_URL)
+      - up
+    envFrom:
+      - secretRef:
+          name: db-credentials
+    volumeMounts:
+      - name: migrations
+        mountPath: /migrations","// Running migrations at startup in every replica
+func main() {
+    m, _ := migrate.New(""file://migrations"", os.Getenv(""DATABASE_URL""))
+    m.Up() // Race condition with multiple replicas
+    startServer()
+}",medium,https://kubernetes.io/docs/concepts/workloads/pods/init-containers/
+21,Sidecar Pattern,Use sidecar containers for cross-cutting concerns,"Deploy sidecar containers alongside the main Go application for logging agents, proxy, or monitoring collectors without modifying app code",Use sidecar containers for concerns like log shipping or TLS termination keeping the main container focused,Bundle all cross-cutting concerns into the main application container increasing complexity and coupling,"# deployment.yaml with logging sidecar
+containers:
+  - name: app
+    image: myapp:v1.0.0
+    ports:
+      - containerPort: 8080
+    volumeMounts:
+      - name: logs
+        mountPath: /var/log/app
+  - name: log-shipper
+    image: fluent/fluent-bit:latest
+    volumeMounts:
+      - name: logs
+        mountPath: /var/log/app
+        readOnly: true","// All concerns bundled in main app
+func main() {
+    // App logic
+    go startHTTPServer()
+    // Log shipping logic
+    go shipLogsToElastic()
+    // Metrics proxy
+    go startMetricsProxy()
+    select {}
+}",low,https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/
+22,Service Mesh,Design Go services for service mesh compatibility,"Build Go services that work well with service mesh proxies like Istio or Linkerd by using proper HTTP semantics and health endpoints",Use standard HTTP/gRPC protocols and propagate trace headers for mesh observability,Implement custom service discovery or mTLS in application code that conflicts with the mesh,"import ""go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp""
+
+// Propagate trace context through service mesh
+client := &http.Client{
+    Transport: otelhttp.NewTransport(http.DefaultTransport),
+    Timeout:   10 * time.Second,
+}
+
+// Standard HTTP server compatible with mesh proxy
+srv := &http.Server{
+    Addr:         "":8080"",
+    Handler:      otelhttp.NewHandler(mux, ""my-service""),
+    ReadTimeout:  15 * time.Second,
+    WriteTimeout: 15 * time.Second,
+}","// Custom mTLS implementation conflicting with mesh
+tlsConfig := &tls.Config{
+    Certificates: []tls.Certificate{cert},
+    ClientAuth:   tls.RequireAndVerifyClientCert,
+}
+// Custom service discovery conflicting with mesh DNS
+endpoints := discoverServices(""my-service"")",low,https://istio.io/latest/docs/ops/deployment/application-requirements/
+23,Pod Disruption Budget,Define PodDisruptionBudget for availability during updates,"A PDB ensures that a minimum number of pods remain available during voluntary disruptions like node drains, cluster upgrades, and rolling deployments",Create a PDB with minAvailable or maxUnavailable to protect service availability during planned disruptions,Deploy without PDB allowing all pods to be evicted simultaneously during cluster operations,"# pdb.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: go-service-pdb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: go-service
+---
+# Or use maxUnavailable
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: go-service-pdb
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: go-service","# No PDB defined
+# During node drain, all pods can be evicted at once
+# kubectl drain node-1 --ignore-daemonsets
+# All go-service pods terminated simultaneously",medium,https://kubernetes.io/docs/tasks/run-application/configure-pdb/
+24,Network Policies,Restrict pod-to-pod communication with NetworkPolicy,"Use Kubernetes NetworkPolicy resources to implement microsegmentation, allowing only expected traffic between pods",Define ingress and egress network policies to restrict traffic to only known communication paths,Run pods with default allow-all network policy permitting unrestricted lateral movement,"# networkpolicy.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: go-service-netpol
+spec:
+  podSelector:
+    matchLabels:
+      app: go-service
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: api-gateway
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: postgres
+      ports:
+        - protocol: TCP
+          port: 5432","# No network policies
+# Any pod in the namespace can communicate with any other pod
+# Compromised pod has unrestricted network access",high,https://kubernetes.io/docs/concepts/services-networking/network-policies/
+25,Image Scanning,Run govulncheck and trivy in CI pipelines,"Integrate vulnerability scanning into CI/CD pipelines to catch known vulnerabilities in Go dependencies and container images before deployment",Run govulncheck for Go-specific vulnerabilities and trivy for container image CVEs in every CI build,Skip vulnerability scanning or run it only manually on an ad-hoc basis,"# CI pipeline step
+steps:
+  - name: Go vulnerability check
+    run: |
+      go install golang.org/dl/govulncheck@latest
+      govulncheck ./...
+
+  - name: Container image scan
+    run: |
+      docker build -t myapp:${{ github.sha }} .
+      trivy image --exit-code 1 --severity HIGH,CRITICAL myapp:${{ github.sha }}","# No scanning in CI
+steps:
+  - name: Build and push
+    run: |
+      docker build -t myapp:latest .
+      docker push myapp:latest
+      # No vulnerability scanning, ship and hope",high,https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck

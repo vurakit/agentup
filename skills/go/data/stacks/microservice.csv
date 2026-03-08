@@ -1,0 +1,475 @@
+No,Category,Guideline,Description,Do,Dont,Code Good,Code Bad,Severity,Docs URL
+1,Service Structure,Transport Endpoint Service Layers,"Organize microservices into three layers: transport decodes requests and encodes responses; endpoint adapts transport to service; service contains business logic.",Separate transport, endpoint, and service into distinct packages or files.,Do not mix HTTP decoding logic with business rules in the same function.,"// service.go
+type StringService interface {
+    Uppercase(ctx context.Context, s string) (string, error)
+    Count(ctx context.Context, s string) int
+}
+// endpoint.go
+func MakeUppercaseEndpoint(svc StringService) endpoint.Endpoint {
+    return func(ctx context.Context, request interface{}) (interface{}, error) {
+        req := request.(UppercaseRequest)
+        v, err := svc.Uppercase(ctx, req.S)
+        return UppercaseResponse{V: v, Err: err}, nil
+    }
+}
+// transport.go
+r.Handle(""/uppercase"", httptransport.NewServer(uppercaseEndpoint, decodeUppercaseRequest, encodeResponse))","func uppercaseHandler(w http.ResponseWriter, r *http.Request) {
+    var req struct{ S string }
+    json.NewDecoder(r.Body).Decode(&req)
+    result := strings.ToUpper(req.S)
+    json.NewEncoder(w).Encode(map[string]string{""v"": result})
+    // Transport, business logic, encoding all mixed
+}",warning,https://gokit.io/faq/#architecture-and-design
+2,go-kit Service,Define Business Interface,"Define the service as a plain Go interface with context as the first parameter on every method.",Define a Go interface for your service contract and implement it with a concrete struct.,Do not embed framework types into your service; keep business logic framework-free.,"type OrderService interface {
+    PlaceOrder(ctx context.Context, o Order) (string, error)
+    GetOrder(ctx context.Context, id string) (Order, error)
+    CancelOrder(ctx context.Context, id string) error
+}
+type orderService struct {
+    repo OrderRepository
+}
+func (s *orderService) PlaceOrder(ctx context.Context, o Order) (string, error) {
+    o.ID = uuid.NewString()
+    o.Status = ""placed""
+    if err := s.repo.Save(ctx, o); err != nil {
+        return """", fmt.Errorf(""save order: %w"", err)
+    }
+    return o.ID, nil
+}","type OrderService struct {
+    http.Handler
+    db *sql.DB
+}
+func (s *OrderService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+    // Business logic mixed with HTTP handler
+    // Cannot reuse with gRPC transport
+}",error,https://gokit.io/faq/#service-design
+3,go-kit Endpoint,endpoint.Endpoint Pattern,"Wrap each service method in an endpoint.Endpoint to create a uniform function signature for middleware.",Create one endpoint per service method and apply middleware like logging and instrumentation.,Do not call service methods directly from transport; always go through endpoints for middleware support.,"func MakePlaceOrderEndpoint(svc OrderService) endpoint.Endpoint {
+    return func(ctx context.Context, request interface{}) (interface{}, error) {
+        req := request.(PlaceOrderRequest)
+        id, err := svc.PlaceOrder(ctx, req.Order)
+        if err != nil {
+            return PlaceOrderResponse{Err: err.Error()}, nil
+        }
+        return PlaceOrderResponse{ID: id}, nil
+    }
+}
+type Endpoints struct {
+    PlaceOrder endpoint.Endpoint
+    GetOrder   endpoint.Endpoint
+}","func placeOrderHandler(svc OrderService) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        var o Order
+        json.NewDecoder(r.Body).Decode(&o)
+        id, _ := svc.PlaceOrder(r.Context(), o)
+        json.NewEncoder(w).Encode(map[string]string{""id"": id})
+        // Skips endpoint layer, no middleware
+    }
+}",warning,https://pkg.go.dev/github.com/go-kit/kit/endpoint
+4,go-kit Transport,HTTP and gRPC Transport,"Use go-kit transport packages to bind endpoints to HTTP routes or gRPC service definitions.",Use httptransport.NewServer for HTTP and grpctransport.NewServer for gRPC to bind endpoints.,Do not write raw HTTP handlers when using go-kit; use the transport layer for consistent error encoding.,"httpHandler := httptransport.NewServer(
+    endpoints.PlaceOrder,
+    decodeHTTPPlaceOrderRequest,
+    encodeHTTPResponse,
+    httptransport.ServerErrorEncoder(encodeError),
+)
+grpcHandler := grpctransport.NewServer(
+    endpoints.PlaceOrder,
+    decodeGRPCPlaceOrderRequest,
+    encodeGRPCPlaceOrderResponse,
+)","http.HandleFunc(""/order"", func(w http.ResponseWriter, r *http.Request) {
+    var req PlaceOrderRequest
+    json.NewDecoder(r.Body).Decode(&req)
+    resp, _ := endpoints.PlaceOrder(r.Context(), req)
+    json.NewEncoder(w).Encode(resp)
+    // Manual decoding/encoding bypasses go-kit error handling
+})",warning,https://pkg.go.dev/github.com/go-kit/kit/transport/http
+5,Circuit Breaker,gobreaker Integration,"Wrap service calls with a circuit breaker to stop cascading failures when a downstream service is unhealthy.",Use gobreaker.NewCircuitBreaker with sensible thresholds and wrap outbound calls.,Do not call failing services indefinitely; circuit breakers fail fast and let services recover.,"cb := gobreaker.NewCircuitBreaker(gobreaker.Settings{
+    Name:        ""payment-service"",
+    MaxRequests: 3,
+    Interval:    10 * time.Second,
+    Timeout:     30 * time.Second,
+    ReadyToTrip: func(counts gobreaker.Counts) bool {
+        return counts.ConsecutiveFailures > 5
+    },
+})
+result, err := cb.Execute(func() (interface{}, error) {
+    return paymentClient.Charge(ctx, req)
+})","resp, err := paymentClient.Charge(ctx, req)
+if err != nil {
+    log.Println(""payment failed, retrying..."")
+    resp, err = paymentClient.Charge(ctx, req)
+    // Keeps hammering a failing service
+}",error,https://pkg.go.dev/github.com/sony/gobreaker
+6,Service Discovery,Consul and etcd,"Register services and discover instances dynamically so clients do not need hardcoded addresses.",Use a service registry like Consul and integrate it with go-kit sd package.,Do not hardcode service URLs; use dynamic discovery for resilience and scaling.,"client, err := api.NewClient(api.DefaultConfig())
+if err != nil {
+    log.Fatal(err)
+}
+instancer := consulsd.NewInstancer(
+    consul.NewClient(client),
+    logger,
+    ""payment-service"",
+    []string{""production""},
+    true,
+)
+endpointer := sd.NewEndpointer(instancer, factory, logger)
+balancer := lb.NewRoundRobin(endpointer)
+endpoint := lb.Retry(3, 5*time.Second, balancer)","var paymentURL = ""http://payment-service:8080""
+// Hardcoded URL, no discovery
+// Cannot scale or failover to other instances",warning,https://pkg.go.dev/github.com/go-kit/kit/sd/consul
+7,Load Balancing,Client-Side with go-kit,"Use client-side load balancing to distribute requests across discovered service instances.",Use lb.NewRoundRobin or lb.NewRandom with sd.NewEndpointer for client-side balancing.,Do not rely solely on DNS for load balancing; it lacks health awareness and has TTL caching issues.,"instancer := consulsd.NewInstancer(client, logger, ""order-service"", nil, true)
+endpointer := sd.NewEndpointer(instancer, orderEndpointFactory, logger)
+balancer := lb.NewRoundRobin(endpointer)
+retryEndpoint := lb.Retry(3, 2*time.Second, balancer)
+resp, err := retryEndpoint(ctx, request)
+if err != nil {
+    return fmt.Errorf(""call order-service: %w"", err)
+}","resp, err := http.Get(""http://order-service:8080/orders"")
+// Single instance, no failover
+// DNS round-robin has stale TTL issues",warning,https://pkg.go.dev/github.com/go-kit/kit/sd/lb
+8,Distributed Tracing,OpenTelemetry Spans,"Instrument services with OpenTelemetry to trace requests across service boundaries.",Initialize a TracerProvider and create spans at service boundaries and key operations.,Do not rely solely on logs for debugging distributed systems; traces show request flow.,"exporter, err := otlptracegrpc.New(ctx, otlptracegrpc.WithEndpoint(""otel-collector:4317""), otlptracegrpc.WithInsecure())
+if err != nil {
+    log.Fatal(err)
+}
+tp := sdktrace.NewTracerProvider(
+    sdktrace.WithBatcher(exporter),
+    sdktrace.WithResource(resource.NewWithAttributes(semconv.SchemaURL, semconv.ServiceName(""order-service""))),
+)
+otel.SetTracerProvider(tp)
+tracer := otel.Tracer(""order-service"")
+ctx, span := tracer.Start(ctx, ""PlaceOrder"")
+defer span.End()","func PlaceOrder(ctx context.Context, o Order) error {
+    log.Printf(""placing order %s"", o.ID)
+    // No tracing, cannot correlate with upstream or downstream
+    return nil
+}",warning,https://pkg.go.dev/go.opentelemetry.io/otel
+9,Health Probes,Liveness and Readiness,"Expose /healthz and /readyz endpoints so orchestrators can check service health and readiness.",Implement separate liveness and readiness probes that check dependencies.,Do not use a single health endpoint that always returns 200; check actual dependency health.,"http.HandleFunc(""/healthz"", func(w http.ResponseWriter, r *http.Request) {
+    w.WriteHeader(http.StatusOK)
+    w.Write([]byte(""ok""))
+})
+http.HandleFunc(""/readyz"", func(w http.ResponseWriter, r *http.Request) {
+    if err := db.PingContext(r.Context()); err != nil {
+        w.WriteHeader(http.StatusServiceUnavailable)
+        w.Write([]byte(""db not ready""))
+        return
+    }
+    w.WriteHeader(http.StatusOK)
+    w.Write([]byte(""ready""))
+})","http.HandleFunc(""/health"", func(w http.ResponseWriter, r *http.Request) {
+    w.WriteHeader(http.StatusOK)
+    // Always returns 200 even if DB is down
+    // Orchestrator thinks service is healthy
+})",error,https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
+10,Configuration,12-Factor with Viper,"Load configuration from environment variables and config files following the 12-factor app methodology.",Use viper to read from env vars with fallback to config files and set sensible defaults.,Do not hardcode configuration values; externalize them for different environments.,"viper.SetConfigName(""config"")
+viper.SetConfigType(""yaml"")
+viper.AddConfigPath(""."")
+viper.AutomaticEnv()
+viper.SetEnvKeyReplacer(strings.NewReplacer(""."", ""_""))
+viper.SetDefault(""server.port"", 8080)
+viper.SetDefault(""db.max_open_conns"", 25)
+if err := viper.ReadInConfig(); err != nil {
+    if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+        log.Fatalf(""read config: %v"", err)
+    }
+}
+port := viper.GetInt(""server.port"")","const (
+    port   = 8080
+    dbHost = ""localhost""
+    dbPort = 5432
+)
+// Hardcoded values, cannot change per environment",warning,https://pkg.go.dev/github.com/spf13/viper
+11,Structured Logging,slog Across Services,"Use slog with structured fields and a correlation ID to trace log entries across services.",Create a logger with service name and pass request-scoped fields via context.,Do not use fmt.Println or unstructured log.Printf; structured logs are queryable.,"logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+slog.SetDefault(logger)
+func handleRequest(ctx context.Context, req Request) {
+    traceID := ctx.Value(traceIDKey).(string)
+    slog.InfoContext(ctx, ""processing request"",
+        ""trace_id"", traceID,
+        ""service"", ""order-service"",
+        ""user_id"", req.UserID,
+    )
+}","func handleRequest(req Request) {
+    fmt.Printf(""processing request for user %s\n"", req.UserID)
+    // Unstructured, no trace ID, not queryable
+}",warning,https://pkg.go.dev/log/slog
+12,Metrics,Prometheus Counters and Histograms,"Expose Prometheus metrics for request count, latency, and error rate to monitor service health.",Register counters and histograms and update them in middleware.,Do not run services without metrics; you cannot know if a service is degrading without measurements.,"var (
+    requestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+        Name: ""http_requests_total"",
+        Help: ""Total number of HTTP requests"",
+    }, []string{""method"", ""path"", ""status""})
+    requestDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+        Name:    ""http_request_duration_seconds"",
+        Help:    ""HTTP request duration in seconds"",
+        Buckets: prometheus.DefBuckets,
+    }, []string{""method"", ""path""})
+)
+http.Handle(""/metrics"", promhttp.Handler())","// No metrics endpoint
+// No instrumentation
+// Cannot detect increased latency or error rates
+// Only notice problems when users complain",error,https://pkg.go.dev/github.com/prometheus/client_golang/prometheus
+13,API Gateway Pattern,Reverse Proxy,"Use an API gateway or reverse proxy to route external traffic to internal services and handle cross-cutting concerns.",Use httputil.ReverseProxy or a dedicated gateway for routing and rate limiting.,Do not expose every microservice directly to the internet; use a gateway for unified access.,"target, _ := url.Parse(""http://order-service:8080"")
+proxy := httputil.NewSingleHostReverseProxy(target)
+proxy.ModifyResponse = func(resp *http.Response) error {
+    resp.Header.Set(""X-Gateway"", ""api-gw"")
+    return nil
+}
+mux := http.NewServeMux()
+mux.Handle(""/api/orders/"", http.StripPrefix(""/api"", proxy))
+log.Fatal(http.ListenAndServe("":9090"", mux))","// Expose every service port directly
+// order-service:8080, payment-service:8081, user-service:8082
+// No unified auth, rate limiting, or routing",warning,https://pkg.go.dev/net/http/httputil#ReverseProxy
+14,Event-Driven,NATS or Kafka Messaging,"Use asynchronous messaging for event-driven communication between services to decouple producers from consumers.",Use NATS JetStream or Kafka for durable event publishing and subscribing.,Do not use synchronous HTTP calls for fire-and-forget events; messaging decouples services.,"nc, err := nats.Connect(nats.DefaultURL)
+if err != nil {
+    log.Fatal(err)
+}
+js, err := nc.JetStream()
+if err != nil {
+    log.Fatal(err)
+}
+// Publish
+_, err = js.Publish(""orders.placed"", orderJSON)
+// Subscribe
+_, err = js.Subscribe(""orders.placed"", func(msg *nats.Msg) {
+    var order Order
+    json.Unmarshal(msg.Data, &order)
+    processOrder(order)
+    msg.Ack()
+}, nats.Durable(""order-processor""))","// Synchronous HTTP call for event notification
+resp, err := http.Post(""http://notification-service/notify"", ""application/json"", body)
+// If notification service is down, order placement fails
+// Tight coupling between services",warning,https://pkg.go.dev/github.com/nats-io/nats.go
+15,Saga Pattern,Distributed Transactions,"Implement the saga pattern to coordinate multi-service transactions with compensating actions on failure.",Define each step with an execute and a compensate function; run compensations in reverse on failure.,Do not use distributed locks or two-phase commit across microservices; they do not scale.,"type SagaStep struct {
+    Name       string
+    Execute    func(ctx context.Context) error
+    Compensate func(ctx context.Context) error
+}
+func RunSaga(ctx context.Context, steps []SagaStep) error {
+    var completed []SagaStep
+    for _, step := range steps {
+        if err := step.Execute(ctx); err != nil {
+            for i := len(completed) - 1; i >= 0; i-- {
+                if cErr := completed[i].Compensate(ctx); cErr != nil {
+                    slog.Error(""compensate failed"", ""step"", completed[i].Name, ""error"", cErr)
+                }
+            }
+            return fmt.Errorf(""saga step %s failed: %w"", step.Name, err)
+        }
+        completed = append(completed, step)
+    }
+    return nil
+}","func PlaceOrder(ctx context.Context) error {
+    createOrder(ctx)
+    chargePayment(ctx)
+    reserveInventory(ctx)
+    // If reserveInventory fails, payment is charged but not refunded
+    // No compensating actions
+    return nil
+}",error,https://microservices.io/patterns/data/saga.html
+16,Retry with Backoff,Exponential Backoff,"Retry transient failures with exponential backoff and jitter to avoid thundering herd problems.",Use exponential backoff with jitter and a maximum retry count.,Do not retry immediately in a tight loop; it amplifies load on a struggling service.,"func RetryWithBackoff(ctx context.Context, maxRetries int, fn func() error) error {
+    var err error
+    for i := 0; i < maxRetries; i++ {
+        if err = fn(); err == nil {
+            return nil
+        }
+        backoff := time.Duration(1<<uint(i)) * 100 * time.Millisecond
+        jitter := time.Duration(rand.Int63n(int64(backoff / 2)))
+        select {
+        case <-time.After(backoff + jitter):
+        case <-ctx.Done():
+            return ctx.Err()
+        }
+    }
+    return fmt.Errorf(""after %d retries: %w"", maxRetries, err)
+}","func callService() error {
+    for {
+        err := doCall()
+        if err == nil {
+            return nil
+        }
+        // Immediate retry, no backoff, no limit
+        // Thundering herd on failure
+    }
+}",error,https://pkg.go.dev/time#After
+17,Timeout Propagation,Context Across Services,"Propagate context deadlines across service boundaries so upstream timeouts cancel downstream work.",Set a timeout on the context and pass it to every outbound call.,Do not use context.Background for outbound calls; it ignores upstream cancellation.,"func (s *orderService) PlaceOrder(ctx context.Context, o Order) (string, error) {
+    payCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+    defer cancel()
+    if err := s.paymentClient.Charge(payCtx, o.Total); err != nil {
+        return """", fmt.Errorf(""charge: %w"", err)
+    }
+    invCtx, cancel2 := context.WithTimeout(ctx, 3*time.Second)
+    defer cancel2()
+    if err := s.inventoryClient.Reserve(invCtx, o.Items); err != nil {
+        return """", fmt.Errorf(""reserve: %w"", err)
+    }
+    return o.ID, nil
+}","func (s *orderService) PlaceOrder(ctx context.Context, o Order) (string, error) {
+    s.paymentClient.Charge(context.Background(), o.Total)
+    s.inventoryClient.Reserve(context.Background(), o.Items)
+    // Ignores upstream timeout, requests hang forever
+    return o.ID, nil
+}",error,https://pkg.go.dev/context#WithTimeout
+18,Idempotency,Idempotency Key Pattern,"Accept an idempotency key header and deduplicate requests so retries do not cause double processing.",Store the idempotency key and result; return the cached result on duplicate requests.,Do not process the same request twice; network retries can cause duplicate side effects.,"func (h *handler) PlaceOrder(w http.ResponseWriter, r *http.Request) {
+    key := r.Header.Get(""Idempotency-Key"")
+    if key == """" {
+        http.Error(w, ""Idempotency-Key header required"", http.StatusBadRequest)
+        return
+    }
+    if cached, ok := h.cache.Get(key); ok {
+        json.NewEncoder(w).Encode(cached)
+        return
+    }
+    result, err := h.svc.PlaceOrder(r.Context(), decodeOrder(r))
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+    h.cache.Set(key, result, 24*time.Hour)
+    json.NewEncoder(w).Encode(result)
+}","func (h *handler) PlaceOrder(w http.ResponseWriter, r *http.Request) {
+    result, err := h.svc.PlaceOrder(r.Context(), decodeOrder(r))
+    // No idempotency check
+    // Client retry creates duplicate orders
+    json.NewEncoder(w).Encode(result)
+}",error,https://stripe.com/docs/api/idempotent_requests
+19,Rate Limiting,Per-Service Limits,"Apply rate limiting to protect services from being overwhelmed by too many requests.",Use golang.org/x/time/rate as middleware to limit requests per client or globally.,Do not allow unlimited request rates; one misbehaving client can degrade the entire service.,"limiter := rate.NewLimiter(rate.Every(time.Second), 100)
+func rateLimitMiddleware(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        if !limiter.Allow() {
+            http.Error(w, ""rate limit exceeded"", http.StatusTooManyRequests)
+            return
+        }
+        next.ServeHTTP(w, r)
+    })
+}
+mux.Handle(""/api/"", rateLimitMiddleware(apiHandler))","mux.Handle(""/api/"", apiHandler)
+// No rate limiting
+// A single client can send thousands of requests per second
+// Service becomes unresponsive for everyone",warning,https://pkg.go.dev/golang.org/x/time/rate
+20,Secret Management,Vault Integration,"Load secrets from HashiCorp Vault at runtime instead of baking them into config files or environment variables.",Use the Vault Go client to read secrets at startup or rotate them periodically.,Do not store secrets in config files committed to version control.,"client, err := vault.New(
+    vault.WithAddress(os.Getenv(""VAULT_ADDR"")),
+    vault.WithRequestTimeout(10*time.Second),
+)
+if err != nil {
+    log.Fatal(err)
+}
+if err := client.SetToken(os.Getenv(""VAULT_TOKEN"")); err != nil {
+    log.Fatal(err)
+}
+secret, err := client.Secrets.KvV2Read(ctx, ""db-creds"", vault.WithMountPath(""secret""))
+if err != nil {
+    log.Fatal(err)
+}
+dbUser := secret.Data.Data[""username""].(string)
+dbPass := secret.Data.Data[""password""].(string)","// config.yaml committed to git
+// db:
+//   user: admin
+//   password: supersecret123
+// Secrets in version control, visible to everyone",error,https://pkg.go.dev/github.com/hashicorp/vault-client-go
+21,Graceful Shutdown,Multi-Service Shutdown,"Listen for OS signals and gracefully shut down HTTP servers, message consumers, and database connections in order.",Use signal.NotifyContext and shut down components in reverse initialization order.,Do not call os.Exit or log.Fatal during normal shutdown; it skips cleanup.,"ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+defer stop()
+srv := &http.Server{Addr: "":8080"", Handler: mux}
+go func() { srv.ListenAndServe() }()
+<-ctx.Done()
+slog.Info(""shutting down"")
+shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+defer cancel()
+srv.Shutdown(shutdownCtx)
+consumer.Close()
+db.Close()
+slog.Info(""shutdown complete"")","go func() { log.Fatal(http.ListenAndServe("":8080"", mux)) }()
+select {}
+// log.Fatal calls os.Exit(1)
+// No signal handling, no graceful shutdown
+// In-flight requests are dropped",error,https://pkg.go.dev/net/http#Server.Shutdown
+22,Docker Multi-Stage,Minimal Images,"Use multi-stage Docker builds to compile Go binaries in a build stage and copy only the binary into a minimal runtime image.",Use a Go builder stage and a distroless or scratch final stage.,Do not ship the Go toolchain or source code in production images.,"# Dockerfile
+FROM golang:1.23-alpine AS builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -o /app/server ./cmd/server
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=builder /app/server /server
+EXPOSE 8080
+ENTRYPOINT [""/server""]","FROM golang:1.23
+WORKDIR /app
+COPY . .
+RUN go build -o server ./cmd/server
+CMD [""./server""]
+# 1GB+ image with Go toolchain and source code",warning,https://docs.docker.com/build/building/multi-stage/
+23,K8s Deployment,Resource Limits and Probes,"Define resource requests and limits plus liveness and readiness probes in Kubernetes deployment manifests.",Set CPU and memory requests and limits and configure probe endpoints.,Do not deploy without resource limits; a single pod can consume all node resources.,"# deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service
+spec:
+  replicas: 3
+  template:
+    spec:
+      containers:
+      - name: order-service
+        image: order-service:v1.2.0
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8080
+          periodSeconds: 5","apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service
+spec:
+  template:
+    spec:
+      containers:
+      - name: order-service
+        image: order-service:latest
+        # No resource limits, no probes
+        # Pod can consume entire node
+        # K8s cannot detect unhealthy pods",error,https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+24,Inter-Service Auth,mTLS or JWT,"Authenticate service-to-service communication using mutual TLS or signed JWTs to prevent unauthorized access.",Use mTLS certificates or verify JWTs on every inter-service call.,Do not allow unauthenticated internal traffic; a compromised service can access everything.,"cert, err := tls.LoadX509KeyPair(""client.crt"", ""client.key"")
+if err != nil {
+    log.Fatal(err)
+}
+caCert, err := os.ReadFile(""ca.crt"")
+if err != nil {
+    log.Fatal(err)
+}
+caCertPool := x509.NewCertPool()
+caCertPool.AppendCertsFromPEM(caCert)
+tlsConfig := &tls.Config{
+    Certificates: []tls.Certificate{cert},
+    RootCAs:      caCertPool,
+}
+client := &http.Client{
+    Transport: &http.Transport{TLSClientConfig: tlsConfig},
+}
+resp, err := client.Get(""https://payment-service:8443/charge"")","resp, err := http.Get(""http://payment-service:8080/charge"")
+// Plain HTTP, no authentication
+// Any service or attacker on the network can call this",error,https://pkg.go.dev/crypto/tls
+25,Testing Microservices,Contract Testing,"Use contract tests to verify that service interfaces match expectations between producers and consumers.",Write contract tests that verify request and response schemas between services.,Do not rely solely on end-to-end tests; they are slow and brittle in microservice architectures.,"func TestOrderServiceContract(t *testing.T) {
+    srv := httptest.NewServer(NewOrderHandler(mockOrderService{}))
+    defer srv.Close()
+    resp, err := http.Post(srv.URL+""/orders"", ""application/json"",
+        strings.NewReader(`{""item"":""widget"",""qty"":2}`))
+    require.NoError(t, err)
+    require.Equal(t, http.StatusCreated, resp.StatusCode)
+    var result map[string]interface{}
+    json.NewDecoder(resp.Body).Decode(&result)
+    require.Contains(t, result, ""id"")
+    require.Contains(t, result, ""status"")
+    require.Equal(t, ""placed"", result[""status""])
+}","// Only end-to-end tests that spin up all services
+// Takes 10+ minutes to run
+// Breaks when any unrelated service changes
+// No isolated contract verification",warning,https://pact.io

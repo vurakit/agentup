@@ -1,0 +1,293 @@
+No,Category,Guideline,Description,Do,Dont,Code Good,Code Bad,Severity,Docs URL
+1,Echo Instance,Use echo.New() as the single entry point,"Create one Echo instance per application and configure it centrally before starting the server",Initialize Echo once and store in a variable for reuse,"Don't create multiple Echo instances or call echo.New() in handlers","e := echo.New()
+e.HideBanner = true
+e.Server.ReadTimeout = 10 * time.Second","var e *echo.Echo
+func handler(c echo.Context) error {
+    e2 := echo.New()
+    return nil
+}",High,https://echo.labstack.com/docs/quick-start
+2,Route Registration,"Register routes with typed methods e.GET, e.POST","Use the specific HTTP method functions to register handlers for clarity and type safety",Use e.GET e.POST e.PUT e.DELETE e.PATCH for each route,"Don't use e.Add with string method names unless building dynamic routes","e.GET(""/users"", getUsers)
+e.POST(""/users"", createUser)
+e.DELETE(""/users/:id"", deleteUser)","e.Add(""GET"", ""/users"", getUsers)
+e.Add(""POST"", ""/users"", createUser)",Low,https://echo.labstack.com/docs/routing
+3,Route Groups,Use e.Group for API versioning and shared middleware,"Group related routes under a common prefix and apply middleware at the group level instead of per-route",Create groups for versioned APIs and apply middleware to groups,"Don't repeat prefixes across individual routes or apply the same middleware to every route manually","v1 := e.Group(""/api/v1"")
+v1.Use(middleware.Logger())
+v1.GET(""/users"", getUsers)
+v1.POST(""/users"", createUser)","e.GET(""/api/v1/users"", getUsers)
+e.POST(""/api/v1/users"", createUser)
+e.GET(""/api/v2/users"", getUsersV2)",Medium,https://echo.labstack.com/docs/routing#group
+4,Middleware,Apply middleware in the correct order with e.Use and e.Pre,"Use e.Pre for middleware that runs before routing and e.Use for middleware that runs after routing",Use e.Pre for trailing slash removal and e.Use for logging and recovery,"Don't put pre-routing middleware in e.Use or post-routing middleware in e.Pre","e.Pre(middleware.RemoveTrailingSlash())
+e.Use(middleware.Logger())
+e.Use(middleware.Recover())","e.Use(middleware.RemoveTrailingSlash())
+e.Pre(middleware.Logger())
+e.Pre(middleware.Recover())",High,https://echo.labstack.com/docs/middleware
+5,Custom Middleware,Follow the echo.MiddlewareFunc signature for custom middleware,"Return a function that takes echo.HandlerFunc and returns echo.HandlerFunc for composability",Follow the standard middleware pattern with next(c) call chain,"Don't write middleware that skips calling next or breaks the chain unintentionally","func ServerHeader(next echo.HandlerFunc) echo.HandlerFunc {
+    return func(c echo.Context) error {
+        c.Response().Header().Set(""X-Server"", ""Echo"")
+        return next(c)
+    }
+}","func ServerHeader(c echo.Context) error {
+    c.Response().Header().Set(""X-Server"", ""Echo"")
+    return nil
+}",High,https://echo.labstack.com/docs/middleware#custom-middleware
+6,Context,Use echo.Context methods instead of accessing raw http.Request directly,"Echo Context wraps the standard request and response with convenience methods; prefer them for consistency",Use c.Request() c.Response() c.Get() c.Set() for request data,"Don't bypass echo.Context and write to http.ResponseWriter directly","func handler(c echo.Context) error {
+    name := c.FormValue(""name"")
+    c.Set(""user"", name)
+    return c.String(http.StatusOK, name)
+}","func handler(c echo.Context) error {
+    r := c.Request()
+    w := c.Response().Writer
+    r.ParseForm()
+    w.Write([]byte(r.Form.Get(""name"")))
+    return nil
+}",Medium,https://echo.labstack.com/docs/context
+7,Request Binding,Use c.Bind() with struct tags for automatic request parsing,"Bind JSON XML form and query parameters to Go structs using appropriate struct tags",Define structs with json query and form tags then call c.Bind,"Don't manually parse request body or read individual form values for structured data","type CreateUser struct {
+    Name  string `json:""name"" validate:""required""`
+    Email string `json:""email"" validate:""required,email""`
+}
+func createUser(c echo.Context) error {
+    u := new(CreateUser)
+    if err := c.Bind(u); err != nil {
+        return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+    }
+    return c.JSON(http.StatusCreated, u)
+}","func createUser(c echo.Context) error {
+    body, _ := io.ReadAll(c.Request().Body)
+    var u map[string]interface{}
+    json.Unmarshal(body, &u)
+    return c.JSON(http.StatusCreated, u)
+}",High,https://echo.labstack.com/docs/binding
+8,Validation,Integrate a custom validator using echo.Validator interface,"Implement the echo.Validator interface with a library like go-playground/validator for automatic struct validation",Set e.Validator with a custom validator and call c.Validate after c.Bind,"Don't validate manually with if-else chains or skip validation entirely","type CustomValidator struct {
+    validator *validator.Validate
+}
+func (cv *CustomValidator) Validate(i interface{}) error {
+    return cv.validator.Struct(i)
+}
+e.Validator = &CustomValidator{validator: validator.New()}","func createUser(c echo.Context) error {
+    u := new(User)
+    c.Bind(u)
+    if u.Name == """" {
+        return echo.NewHTTPError(400, ""name required"")
+    }
+    if u.Email == """" {
+        return echo.NewHTTPError(400, ""email required"")
+    }
+    return c.JSON(200, u)
+}",High,https://echo.labstack.com/docs/request#validate-data
+9,Response JSON,Use c.JSON c.String c.HTML for type-safe responses,"Echo provides typed response methods that set Content-Type headers automatically",Use c.JSON for API responses and c.String or c.HTML for simple text,"Don't manually marshal JSON or set Content-Type headers when Echo methods suffice","func getUser(c echo.Context) error {
+    u := &User{Name: ""Jon"", Email: ""jon@example.com""}
+    return c.JSON(http.StatusOK, u)
+}","func getUser(c echo.Context) error {
+    u := &User{Name: ""Jon"", Email: ""jon@example.com""}
+    data, _ := json.Marshal(u)
+    c.Response().Header().Set(""Content-Type"", ""application/json"")
+    c.Response().WriteHeader(200)
+    c.Response().Write(data)
+    return nil
+}",Medium,https://echo.labstack.com/docs/response
+10,Error Handler,Define a custom HTTPErrorHandler for consistent error responses,"Override the default error handler to return structured error responses across all endpoints",Set e.HTTPErrorHandler to a custom function that formats errors consistently,"Don't handle errors differently in each handler or ignore returned errors","e.HTTPErrorHandler = func(err error, c echo.Context) {
+    code := http.StatusInternalServerError
+    msg := ""Internal Server Error""
+    if he, ok := err.(*echo.HTTPError); ok {
+        code = he.Code
+        msg = fmt.Sprintf(""%v"", he.Message)
+    }
+    c.JSON(code, map[string]string{""error"": msg})
+}","func handler(c echo.Context) error {
+    data, err := getData()
+    if err != nil {
+        c.String(500, ""error"")
+        return nil
+    }
+    return c.JSON(200, data)
+}",High,https://echo.labstack.com/docs/error-handling
+11,JWT Middleware,Use echojwt middleware for token-based authentication,"Use the official echo-jwt module for JWT parsing and validation instead of manual token handling",Import github.com/labstack/echo-jwt/v4 and configure with echojwt.Config,"Don't parse JWT tokens manually or store secrets in source code","import echojwt ""github.com/labstack/echo-jwt/v4""
+r := e.Group(""/api"")
+r.Use(echojwt.WithConfig(echojwt.Config{
+    SigningKey: []byte(os.Getenv(""JWT_SECRET"")),
+}))","r := e.Group(""/api"")
+r.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
+    return func(c echo.Context) error {
+        token := c.Request().Header.Get(""Authorization"")
+        // manual JWT parsing
+        return next(c)
+    }
+})",High,https://echo.labstack.com/docs/middleware/jwt
+12,CORS Middleware,Configure CORS with middleware.CORSWithConfig for explicit origins,"Set allowed origins methods and headers explicitly instead of using a wildcard in production",Specify exact allowed origins and methods in CORSConfig,"Don't allow all origins with * in production environments","e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+    AllowOrigins: []string{""https://example.com""},
+    AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete},
+    AllowHeaders: []string{echo.HeaderContentType, echo.HeaderAuthorization},
+}))","e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+    AllowOrigins: []string{""*""},
+    AllowMethods: []string{""*""},
+}))
+",High,https://echo.labstack.com/docs/middleware/cors
+13,Logger Middleware,Use middleware.LoggerWithConfig for structured request logging,"Configure the logger middleware with a custom format to capture relevant request metadata",Use LoggerWithConfig with a structured output format including latency and status,"Don't rely on fmt.Println or log.Println scattered in handlers for request logging","e.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
+    Format: ""${time_rfc3339} ${method} ${uri} ${status} ${latency_human}\n"",
+}))","func handler(c echo.Context) error {
+    log.Printf(""Request: %s %s"", c.Request().Method, c.Request().URL.Path)
+    return c.String(200, ""ok"")
+}",Medium,https://echo.labstack.com/docs/middleware/logger
+14,Recovery Middleware,Always use middleware.Recover to prevent server crashes,"The Recover middleware catches panics in the handler chain and returns a 500 error instead of crashing",Add middleware.Recover() as one of the first middleware in the chain,"Don't skip recovery middleware or add it after other middleware that might panic","e.Use(middleware.Recover())
+e.Use(middleware.Logger())
+e.GET(""/users"", getUsers)","e.GET(""/users"", getUsers)
+// no recover middleware - a panic in getUsers crashes the server",Critical,https://echo.labstack.com/docs/middleware/recover
+15,Rate Limiter,Use middleware.RateLimiter with a memory store to prevent abuse,"Apply rate limiting middleware to protect endpoints from excessive requests",Configure RateLimiter with RateLimiterMemoryStore and appropriate rate values,"Don't leave public APIs unprotected or implement custom rate limiting with global variables","e.Use(middleware.RateLimiter(middleware.NewRateLimiterMemoryStore(20)))","var requestCount int
+func rateLimitHandler(next echo.HandlerFunc) echo.HandlerFunc {
+    return func(c echo.Context) error {
+        requestCount++
+        if requestCount > 100 {
+            return echo.NewHTTPError(429)
+        }
+        return next(c)
+    }
+}",Medium,https://echo.labstack.com/docs/middleware/rate-limiter
+16,Static Files,Use e.Static and e.File for serving static assets,"Serve static files from a directory or individual files using Echo built-in methods",Use e.Static for directories and e.File for individual files like favicon,"Don't implement custom handlers to read and serve static files manually","e.Static(""/static"", ""assets"")
+e.File(""/favicon.ico"", ""assets/favicon.ico"")
+e.File(""/robots.txt"", ""assets/robots.txt"")","e.GET(""/static/*"", func(c echo.Context) error {
+    path := c.Param(""*"")
+    data, err := os.ReadFile(""assets/"" + path)
+    if err != nil {
+        return echo.NewHTTPError(404)
+    }
+    return c.Blob(200, ""application/octet-stream"", data)
+})",Medium,https://echo.labstack.com/docs/static-files
+17,Template Rendering,Implement echo.Renderer interface for HTML template rendering,"Create a custom renderer that wraps html/template and register it with e.Renderer",Implement the Render method and use c.Render in handlers,"Don't execute templates manually and write HTML bytes to the response","type Template struct {
+    templates *template.Template
+}
+func (t *Template) Render(w io.Writer, name string, data interface{}, c echo.Context) error {
+    return t.templates.ExecuteTemplate(w, name, data)
+}
+e.Renderer = &Template{
+    templates: template.Must(template.ParseGlob(""views/*.html"")),
+}","func handler(c echo.Context) error {
+    t, _ := template.ParseFiles(""views/index.html"")
+    var buf bytes.Buffer
+    t.Execute(&buf, data)
+    return c.HTML(200, buf.String())
+}",Medium,https://echo.labstack.com/docs/templates
+18,File Upload,Use c.FormFile to handle file uploads safely,"Use Echo built-in c.FormFile to retrieve uploaded files and validate size and type before saving",Use c.FormFile and validate the file before calling io.Copy to save,"Don't parse multipart forms manually or skip file size and type validation","func upload(c echo.Context) error {
+    file, err := c.FormFile(""document"")
+    if err != nil {
+        return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+    }
+    src, _ := file.Open()
+    defer src.Close()
+    dst, _ := os.Create(filepath.Join(""uploads"", file.Filename))
+    defer dst.Close()
+    io.Copy(dst, src)
+    return c.JSON(http.StatusOK, map[string]string{""file"": file.Filename})
+}","func upload(c echo.Context) error {
+    r := c.Request()
+    r.ParseMultipartForm(32 << 20)
+    file := r.MultipartForm.File[""document""][0]
+    // unsafe direct access without error checking
+    return c.String(200, file.Filename)
+}",High,https://echo.labstack.com/docs/request#form-data
+19,WebSocket,Use gorilla/websocket upgrader with Echo handlers,"Integrate gorilla/websocket by upgrading the connection inside an Echo handler function",Create a websocket.Upgrader and call Upgrade inside an Echo handler,"Don't mix Echo response methods with raw WebSocket writes or skip origin checking","var upgrader = websocket.Upgrader{
+    CheckOrigin: func(r *http.Request) bool { return true },
+}
+func wsHandler(c echo.Context) error {
+    ws, err := upgrader.Upgrade(c.Response(), c.Request(), nil)
+    if err != nil {
+        return err
+    }
+    defer ws.Close()
+    for {
+        _, msg, err := ws.ReadMessage()
+        if err != nil {
+            break
+        }
+        ws.WriteMessage(websocket.TextMessage, msg)
+    }
+    return nil
+}","func wsHandler(c echo.Context) error {
+    // trying to use c.JSON alongside WebSocket
+    ws, _ := upgrader.Upgrade(c.Response(), c.Request(), nil)
+    c.JSON(200, ""connected"")
+    ws.Close()
+    return nil
+}",Medium,https://echo.labstack.com/docs/cookbook/websocket
+20,Graceful Shutdown,Use e.Shutdown with context for graceful server shutdown,"Start the server in a goroutine and use signal.Notify with context to gracefully drain connections",Use context.WithTimeout and e.Shutdown for clean shutdown on interrupt,"Don't call e.Start on the main goroutine without a shutdown mechanism or use log.Fatal(e.Start())","go func() {
+    if err := e.Start("":8080""); err != nil && err != http.ErrServerClosed {
+        e.Logger.Fatal(""shutting down the server"")
+    }
+}()
+quit := make(chan os.Signal, 1)
+signal.Notify(quit, os.Interrupt)
+<-quit
+ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+defer cancel()
+if err := e.Shutdown(ctx); err != nil {
+    e.Logger.Fatal(err)
+}","func main() {
+    e := echo.New()
+    e.GET(""/"", handler)
+    log.Fatal(e.Start("":8080""))
+    // server stops abruptly with no cleanup
+}",High,https://echo.labstack.com/docs/cookbook/graceful-shutdown
+21,Testing,Use httptest.NewRequest and httptest.NewRecorder with Echo,"Create test cases using net/http/httptest to test Echo handlers without starting a real server",Create an Echo instance and use echo.NewContext with httptest objects,"Don't start a real server in tests or test handlers by calling them as plain functions","func TestGetUser(t *testing.T) {
+    e := echo.New()
+    req := httptest.NewRequest(http.MethodGet, ""/users/1"", nil)
+    rec := httptest.NewRecorder()
+    c := e.NewContext(req, rec)
+    c.SetPath(""/users/:id"")
+    c.SetParamNames(""id"")
+    c.SetParamValues(""1"")
+    if assert.NoError(t, getUser(c)) {
+        assert.Equal(t, http.StatusOK, rec.Code)
+    }
+}","func TestGetUser(t *testing.T) {
+    go func() {
+        e := echo.New()
+        e.GET(""/users/:id"", getUser)
+        e.Start("":9999"")
+    }()
+    time.Sleep(time.Second)
+    resp, _ := http.Get(""http://localhost:9999/users/1"")
+    // fragile test with real server
+}",High,https://echo.labstack.com/docs/testing
+22,Route Naming,Name routes with .Name for reverse URL generation,"Assign names to routes to enable URL generation using echo.Reverse which avoids hardcoded paths",Call .Name on route registration and use echo.Reverse to build URLs,"Don't hardcode URL paths in templates or redirects when routes could change","usersRoute := e.GET(""/users"", getUsers).Name = ""get-users""
+userRoute := e.GET(""/users/:id"", getUser).Name = ""get-user""
+// later: echo.Reverse(""get-user"", ""1"") returns ""/users/1""","func handler(c echo.Context) error {
+    return c.Redirect(http.StatusFound, ""/users/1"")
+    // hardcoded path that breaks if route changes
+}",Low,https://echo.labstack.com/docs/routing#route-naming
+23,Path Parameters,Use c.Param for path params and c.QueryParam for query strings,"Distinguish between path parameters defined in the route and query parameters appended to the URL",Use c.Param for :id style path segments and c.QueryParam for ?key=val,"Don't mix up c.Param and c.QueryParam or access params from the raw URL","func getUser(c echo.Context) error {
+    id := c.Param(""id"")
+    fields := c.QueryParam(""fields"")
+    return c.JSON(http.StatusOK, map[string]string{
+        ""id"": id, ""fields"": fields,
+    })
+}
+e.GET(""/users/:id"", getUser)","func getUser(c echo.Context) error {
+    id := c.QueryParam(""id"")
+    // wrong: id is a path param not a query param
+    return c.JSON(200, map[string]string{""id"": id})
+}
+e.GET(""/users/:id"", getUser)",Medium,https://echo.labstack.com/docs/routing#path-parameters
+24,Request Timeout,Use middleware.TimeoutWithConfig to limit handler execution time,"Apply timeout middleware to prevent long-running handlers from consuming server resources indefinitely",Configure TimeoutWithConfig with a reasonable duration and custom error message,"Don't let handlers run indefinitely or implement manual timeout logic with goroutines","e.Use(middleware.TimeoutWithConfig(middleware.TimeoutConfig{
+    Timeout:      30 * time.Second,
+    ErrorMessage: ""request timeout"",
+}))","func handler(c echo.Context) error {
+    ch := make(chan string)
+    go func() {
+        result := longOperation()
+        ch <- result
+    }()
+    select {
+    case res := <-ch:
+        return c.String(200, res)
+    case <-time.After(30 * time.Second):
+        return echo.NewHTTPError(408, ""timeout"")
+    }
+}",High,https://echo.labstack.com/docs/middleware/timeout
+25,Production Config,Set HideBanner and HidePort and configure timeouts for production,"Disable the startup banner and port log in production and set appropriate server timeouts",Set HideBanner HidePort to true and configure ReadTimeout WriteTimeout on the server,"Don't leave default settings in production or skip server timeout configuration","e := echo.New()
+e.HideBanner = true
+e.HidePort = true
+e.Server.ReadTimeout = 10 * time.Second
+e.Server.WriteTimeout = 10 * time.Second
+e.Server.IdleTimeout = 30 * time.Second","e := echo.New()
+// default banner prints in production logs
+// no timeouts set - vulnerable to slowloris attacks
+e.Start("":8080"")",High,https://echo.labstack.com/docs/quick-start

@@ -1,0 +1,428 @@
+No,Pattern Name,Keywords,Context,Do,Dont,Code Good,Code Bad,Severity,Package
+1,Sentinel Errors,"errors.New, sentinel, predefined","Define well-known errors as package-level variables so callers can compare against them","Use errors.New to create package-level sentinel errors and export them for callers to check","Create ad-hoc error strings in multiple places or use raw string comparison","var ErrNotFound = errors.New(""item not found"")
+
+func FindItem(id string) (*Item, error) {
+	item, ok := store[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return item, nil
+}","func FindItem(id string) (*Item, error) {
+	item, ok := store[id]
+	if !ok {
+		return nil, errors.New(""item not found"")
+	}
+	return item, nil
+}",Critical,errors
+2,Error Wrapping,"fmt.Errorf, %w, wrap","Add context to errors while preserving the original error for unwrapping","Use fmt.Errorf with %w to wrap errors so callers can unwrap them","Use %v instead of %w which discards the original error chain","func GetUser(id int) (*User, error) {
+	user, err := db.QueryUser(id)
+	if err != nil {
+		return nil, fmt.Errorf(""GetUser id=%d: %w"", id, err)
+	}
+	return user, nil
+}","func GetUser(id int) (*User, error) {
+	user, err := db.QueryUser(id)
+	if err != nil {
+		return nil, fmt.Errorf(""GetUser id=%d: %v"", id, err)
+	}
+	return user, nil
+}",Critical,fmt
+3,Error Unwrapping Is,"errors.Is, sentinel check, unwrap","Check if an error in a chain matches a known sentinel value","Use errors.Is to traverse the entire error chain when checking for a sentinel","Use == to compare errors directly which fails when the error has been wrapped","func HandleRequest(id string) error {
+	item, err := FindItem(id)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return writeNotFound()
+		}
+		return err
+	}
+	return render(item)
+}","func HandleRequest(id string) error {
+	item, err := FindItem(id)
+	if err != nil {
+		if err == ErrNotFound {
+			return writeNotFound()
+		}
+		return err
+	}
+	return render(item)
+}",Critical,errors
+4,Error Unwrapping As,"errors.As, type assertion, unwrap","Extract a specific error type from an error chain to access its fields","Use errors.As to safely extract a typed error from any depth in the chain","Use a direct type assertion which breaks when the error has been wrapped","func HandleError(err error) {
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		log.Printf(""path error on %s: %v"", pathErr.Path, pathErr.Err)
+		return
+	}
+	log.Printf(""unexpected error: %v"", err)
+}","func HandleError(err error) {
+	if pathErr, ok := err.(*os.PathError); ok {
+		log.Printf(""path error on %s: %v"", pathErr.Path, pathErr.Err)
+		return
+	}
+	log.Printf(""unexpected error: %v"", err)
+}",Critical,errors
+5,Custom Error Types,"Error(), struct, interface","Create domain-specific error types that carry extra context beyond a message string","Define a struct that implements the error interface and carries relevant fields","Return bare strings or use fmt.Errorf for every error losing type information","type ValidationError struct {
+	Field   string
+	Message string
+}
+
+func (e *ValidationError) Error() string {
+	return fmt.Sprintf(""validation failed on %s: %s"", e.Field, e.Message)
+}
+
+func ValidateAge(age int) error {
+	if age < 0 {
+		return &ValidationError{Field: ""age"", Message: ""must be non-negative""}
+	}
+	return nil
+}","func ValidateAge(age int) error {
+	if age < 0 {
+		return fmt.Errorf(""validation failed on age: must be non-negative"")
+	}
+	return nil
+}",High,fmt
+6,Error Wrapping Hierarchy,"stdlib, pkg/errors, wrap chain","Choose between standard library error wrapping and third-party packages","Use fmt.Errorf with %w from the standard library for wrapping errors in modern Go","Use deprecated pkg/errors.Wrap when the stdlib provides the same functionality","import ""fmt""
+
+func ReadConfig(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf(""ReadConfig %s: %w"", path, err)
+	}
+	var cfg Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf(""ReadConfig unmarshal: %w"", err)
+	}
+	return &cfg, nil
+}","import ""github.com/pkg/errors""
+
+func ReadConfig(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, errors.Wrap(err, ""ReadConfig"")
+	}
+	var cfg Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, errors.Wrap(err, ""ReadConfig unmarshal"")
+	}
+	return &cfg, nil
+}",Medium,fmt
+7,Return vs Panic,"panic, recover, fatal, unrecoverable","Decide when to return an error versus when to panic","Return errors for any condition the caller can reasonably handle; only panic for truly unrecoverable programmer bugs","Use panic for expected runtime failures like missing files or network timeouts","func MustCompileRegex(pattern string) *regexp.Regexp {
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		panic(fmt.Sprintf(""invalid regex %q: %v"", pattern, err))
+	}
+	return re
+}
+
+var emailRe = MustCompileRegex(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)","func LoadConfig(path string) *Config {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		panic(err)
+	}
+	var cfg Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		panic(err)
+	}
+	return &cfg
+}",Critical,builtin
+8,Goroutine Error Handling,"errgroup, goroutine, sync","Propagate errors from goroutines back to the caller using errgroup","Use golang.org/x/sync/errgroup to run goroutines and collect the first error","Launch goroutines with go and silently ignore errors or use shared mutable state","func FetchAll(ctx context.Context, urls []string) ([]string, error) {
+	g, ctx := errgroup.WithContext(ctx)
+	results := make([]string, len(urls))
+	for i, url := range urls {
+		i, url := i, url
+		g.Go(func() error {
+			body, err := fetch(ctx, url)
+			if err != nil {
+				return fmt.Errorf(""fetch %s: %w"", url, err)
+			}
+			results[i] = body
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+	return results, nil
+}","func FetchAll(urls []string) []string {
+	results := make([]string, len(urls))
+	for i, url := range urls {
+		go func(i int, url string) {
+			body, _ := fetch(context.TODO(), url)
+			results[i] = body
+		}(i, url)
+	}
+	time.Sleep(5 * time.Second)
+	return results
+}",High,golang.org/x/sync/errgroup
+9,HTTP Error Responses,"http, JSON, API, status","Return structured JSON error responses from HTTP handlers","Define an error response struct and a helper to write consistent JSON errors","Write ad-hoc plain text error strings with http.Error","type APIError struct {
+	Code    int    `json:""code""`
+	Message string `json:""message""`
+}
+
+func writeError(w http.ResponseWriter, code int, msg string) {
+	w.Header().Set(""Content-Type"", ""application/json"")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(APIError{Code: code, Message: msg})
+}
+
+func GetHandler(w http.ResponseWriter, r *http.Request) {
+	item, err := findItem(r.URL.Query().Get(""id""))
+	if err != nil {
+		writeError(w, http.StatusNotFound, ""item not found"")
+		return
+	}
+	json.NewEncoder(w).Encode(item)
+}","func GetHandler(w http.ResponseWriter, r *http.Request) {
+	item, err := findItem(r.URL.Query().Get(""id""))
+	if err != nil {
+		http.Error(w, ""item not found"", 404)
+		return
+	}
+	json.NewEncoder(w).Encode(item)
+}",High,net/http
+10,Validation Errors,"validate, field, multi-error","Collect and return multiple validation errors at once for a struct","Accumulate all field errors into a slice and return them together","Return on the first validation error forcing users to fix one field at a time","type FieldError struct {
+	Field   string `json:""field""`
+	Message string `json:""message""`
+}
+
+func ValidateUser(u User) []FieldError {
+	var errs []FieldError
+	if u.Name == """" {
+		errs = append(errs, FieldError{Field: ""name"", Message: ""is required""})
+	}
+	if u.Age < 0 || u.Age > 150 {
+		errs = append(errs, FieldError{Field: ""age"", Message: ""must be between 0 and 150""})
+	}
+	if !strings.Contains(u.Email, ""@"") {
+		errs = append(errs, FieldError{Field: ""email"", Message: ""invalid format""})
+	}
+	return errs
+}","func ValidateUser(u User) error {
+	if u.Name == """" {
+		return errors.New(""name is required"")
+	}
+	if u.Age < 0 || u.Age > 150 {
+		return errors.New(""invalid age"")
+	}
+	if !strings.Contains(u.Email, ""@"") {
+		return errors.New(""invalid email"")
+	}
+	return nil
+}",Medium,errors
+11,Database Error Handling,"sql.ErrNoRows, database, query","Handle the special sql.ErrNoRows sentinel returned when a query yields no results","Check for sql.ErrNoRows with errors.Is and convert it to a domain error","Let sql.ErrNoRows leak out of the data layer or ignore it entirely","func GetUserByID(ctx context.Context, db *sql.DB, id int64) (*User, error) {
+	var u User
+	err := db.QueryRowContext(ctx,
+		""SELECT id, name, email FROM users WHERE id = $1"", id,
+	).Scan(&u.ID, &u.Name, &u.Email)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrUserNotFound
+		}
+		return nil, fmt.Errorf(""GetUserByID query: %w"", err)
+	}
+	return &u, nil
+}","func GetUserByID(ctx context.Context, db *sql.DB, id int64) (*User, error) {
+	var u User
+	err := db.QueryRowContext(ctx,
+		""SELECT id, name, email FROM users WHERE id = $1"", id,
+	).Scan(&u.ID, &u.Name, &u.Email)
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}",High,database/sql
+12,Error Logging Strategy,"log, top-level, once","Log errors once at the top of the call stack and return them everywhere else","Return errors up the stack and log them in one place such as middleware or main","Log the same error at every layer creating duplicate noisy log entries","func main() {
+	if err := run(); err != nil {
+		log.Fatalf(""fatal: %v"", err)
+	}
+}
+
+func run() error {
+	cfg, err := loadConfig(""config.yaml"")
+	if err != nil {
+		return fmt.Errorf(""run: %w"", err)
+	}
+	return serve(cfg)
+}","func loadConfig(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		log.Printf(""loadConfig error: %v"", err)
+		return nil, err
+	}
+	var cfg Config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		log.Printf(""loadConfig unmarshal error: %v"", err)
+		return nil, err
+	}
+	return &cfg, nil
+}",High,log
+13,Panic Recover Pattern,"recover, middleware, defer","Catch panics in HTTP handlers to prevent the server from crashing","Use a defer/recover middleware to catch panics and return a 500 response","Let panics propagate and crash the entire server process","func RecoverMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf(""panic recovered: %v\n%s"", rec, debug.Stack())
+				http.Error(w, ""internal server error"", http.StatusInternalServerError)
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}","func handler(w http.ResponseWriter, r *http.Request) {
+	data := fetchData()
+	result := data[0]
+	fmt.Fprintf(w, ""result: %v"", result)
+}",High,net/http
+14,Multiple Errors,"errors.Join, Go 1.20, combine","Combine multiple independent errors into a single error value","Use errors.Join to aggregate errors and let callers unwrap each one individually","Return only the last error or concatenate error strings manually","func CloseAll(closers ...io.Closer) error {
+	var errs []error
+	for _, c := range closers {
+		if err := c.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}","func CloseAll(closers ...io.Closer) error {
+	var msg string
+	for _, c := range closers {
+		if err := c.Close(); err != nil {
+			msg += err.Error() + ""; ""
+		}
+	}
+	if msg != """" {
+		return errors.New(msg)
+	}
+	return nil
+}",Medium,errors
+15,Unwrap Interface,"Unwrap(), interface, chain","Implement the Unwrap method so custom errors participate in the error chain","Add an Unwrap method that returns the wrapped inner error","Embed an error field without implementing Unwrap making errors.Is and errors.As fail","type OpError struct {
+	Op  string
+	Err error
+}
+
+func (e *OpError) Error() string {
+	return fmt.Sprintf(""operation %s: %v"", e.Op, e.Err)
+}
+
+func (e *OpError) Unwrap() error {
+	return e.Err
+}","type OpError struct {
+	Op  string
+	Err error
+}
+
+func (e *OpError) Error() string {
+	return fmt.Sprintf(""operation %s: %v"", e.Op, e.Err)
+}",High,errors
+16,No String Matching,"string compare, Error(), fragile","Avoid comparing error messages as strings for control flow decisions","Use sentinel errors or typed errors and compare with errors.Is or errors.As","Call err.Error() and check if the string contains a substring","func IsNotFound(err error) bool {
+	return errors.Is(err, ErrNotFound)
+}
+
+func Handle(err error) {
+	if IsNotFound(err) {
+		log.Println(""resource not found"")
+		return
+	}
+	log.Printf(""unexpected: %v"", err)
+}","func IsNotFound(err error) bool {
+	return strings.Contains(err.Error(), ""not found"")
+}
+
+func Handle(err error) {
+	if IsNotFound(err) {
+		log.Println(""resource not found"")
+		return
+	}
+	log.Printf(""unexpected: %v"", err)
+}",Critical,errors
+17,Error Context,"context, annotate, wrap","Add contextual information to errors as they travel up the call stack without losing the original","Wrap errors at each layer with relevant context using fmt.Errorf and %w","Return bare errors with no context making debugging difficult","func (s *Service) GetOrder(ctx context.Context, id string) (*Order, error) {
+	order, err := s.repo.FindOrder(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf(""Service.GetOrder(id=%s): %w"", id, err)
+	}
+	if err := s.validate(order); err != nil {
+		return nil, fmt.Errorf(""Service.GetOrder validate: %w"", err)
+	}
+	return order, nil
+}","func (s *Service) GetOrder(ctx context.Context, id string) (*Order, error) {
+	order, err := s.repo.FindOrder(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.validate(order); err != nil {
+		return nil, err
+	}
+	return order, nil
+}",High,fmt
+18,Domain Error Types,"domain, hierarchy, kind","Create a family of domain errors with an error kind enum for fine-grained matching","Define an error kind enum and a domain error struct so callers can switch on the kind","Use generic untyped errors that force callers to parse messages","type ErrorKind int
+
+const (
+	ErrKindNotFound ErrorKind = iota
+	ErrKindConflict
+	ErrKindForbidden
+)
+
+type DomainError struct {
+	Kind    ErrorKind
+	Entity  string
+	Message string
+	Err     error
+}
+
+func (e *DomainError) Error() string {
+	if e.Err != nil {
+		return fmt.Sprintf(""%s %s: %v"", e.Entity, e.Message, e.Err)
+	}
+	return fmt.Sprintf(""%s %s"", e.Entity, e.Message)
+}
+
+func (e *DomainError) Unwrap() error {
+	return e.Err
+}","func getOrder(id string) (*Order, error) {
+	o, err := repo.Find(id)
+	if err != nil {
+		return nil, errors.New(""order not found"")
+	}
+	if o.UserID != currentUser {
+		return nil, errors.New(""forbidden"")
+	}
+	return o, nil
+}",Medium,errors
+19,Auth Error Masking,"auth,401,403,unauthorized,forbidden,login,credential","Returning auth errors to clients without leaking internal details","Return same generic error message for both wrong email and wrong password. Log specific reason server-side. Never expose whether an email exists or which role is required.","Return different errors for wrong email vs wrong password. Expose role requirements in error messages. Leak user existence through timing or message differences.","func respondAuthError(w http.ResponseWriter, status int, publicMsg string, internalDetail string) {
+	log.Printf(""auth: %s"", internalDetail)
+	http.Error(w, fmt.Sprintf(`{""error"":""%s""}`, publicMsg), status)
+}
+// respondAuthError(w, 401, ""invalid credentials"", ""user not found: test@x.com"")
+// respondAuthError(w, 401, ""invalid credentials"", ""bcrypt mismatch user 42"")
+// respondAuthError(w, 403, ""forbidden"", ""user 42 role=user needs admin"")","user, err := repo.FindByEmail(ctx, email)
+if user == nil {
+	respondError(w, 401, ""user not found"")
+	return
+}
+if !checkPassword(user.Hash, password) {
+	respondError(w, 401, ""wrong password"")
+	return
+}",High,net/http
+20,Timing-Safe Secret Comparison,"timing,constant time,auth,compare,secret,token,subtle","Comparing secrets or tokens in authentication code","Use crypto/subtle.ConstantTimeCompare for all secret comparisons (API keys, HMAC signatures, tokens). Timing attacks can leak information about correct characters by measuring response time.","Use == or strings.Compare for secrets. Compare byte-by-byte in a loop. Short-circuit on first mismatch.","import ""crypto/subtle""
+
+func SecureCompare(a, b string) bool {
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
+}
+
+func AdminAuth(secret string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			provided := r.Header.Get(""X-Admin-Secret"")
+			if !SecureCompare(provided, secret) {
+				http.Error(w, `{""error"":""unauthorized""}`, 401)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}","func AdminAuth(secret string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get(""X-Admin-Secret"") != secret {
+				http.Error(w, ""unauthorized"", 401)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}",High,crypto/subtle

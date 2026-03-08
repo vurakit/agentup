@@ -1,0 +1,54 @@
+{
+    "platform": "antigravity",
+    "name": "AgentUp",
+    "version": "1.0.0",
+    "description": "AI-powered Go backend generator for Google Antigravity",
+    "install_path": ".agent/skills/agentup",
+    "config_file": ".agent/skills/agentup/SKILL.md",
+    "search_command": "python3 .agent/skills/agentup/scripts/search.py",
+    "features": {
+        "domain_search": true,
+        "stack_search": true,
+        "arch_system": true,
+        "auto_detect": true,
+        "persist": true
+    },
+    "domains": [
+        "pattern",
+        "package",
+        "error",
+        "perf",
+        "test",
+        "concurrency",
+        "interface",
+        "arch",
+        "idiom",
+        "anti",
+        "tooling",
+        "module"
+    ],
+    "stacks": [
+        "web-gin",
+        "web-echo",
+        "web-fiber",
+        "web-stdlib",
+        "cli",
+        "grpc",
+        "database",
+        "microservice",
+        "cloud-native",
+        "data-pipeline"
+    ],
+    "setup": {
+        "copy_files": [
+            {
+                "from": "src/goskill",
+                "to": ".agent/skills/agentup"
+            }
+        ],
+        "create_config": {
+            "file": ".agent/skills/agentup/SKILL.md",
+            "template": "templates/platforms/antigravity-skill.md"
+        }
+    }
+}

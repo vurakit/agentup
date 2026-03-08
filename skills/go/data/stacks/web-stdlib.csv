@@ -1,0 +1,394 @@
+No,Category,Guideline,Description,Do,Dont,Code Good,Code Bad,Severity,Docs URL
+1,ServeMux Setup,Use http.NewServeMux() for routing,"Create a dedicated ServeMux instance using http.NewServeMux() instead of the default mux for better isolation, testability, and security.",Use http.NewServeMux() to create an explicit mux and pass it to http.Server.,Do not use http.DefaultServeMux as any imported package can register routes on it silently.,"mux := http.NewServeMux()
+mux.HandleFunc(""GET /healthz"", healthHandler)
+
+srv := &http.Server{
+	Addr:    "":8080"",
+	Handler: mux,
+}
+log.Fatal(srv.ListenAndServe())","http.HandleFunc(""/healthz"", healthHandler)
+log.Fatal(http.ListenAndServe("":8080"", nil))",High,https://pkg.go.dev/net/http#NewServeMux
+2,Method-Based Routing,Use method prefixes in patterns,"Go 1.22+ supports method-based routing with patterns like GET /path and POST /path directly in ServeMux, eliminating the need for manual method checks.",Use the METHOD /path syntax in HandleFunc to restrict routes to specific HTTP methods.,Do not check r.Method manually inside handlers when the mux can enforce it for you.,"mux := http.NewServeMux()
+mux.HandleFunc(""GET /users"", listUsers)
+mux.HandleFunc(""POST /users"", createUser)","mux := http.NewServeMux()
+mux.HandleFunc(""/users"", func(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		listUsers(w, r)
+	case http.MethodPost:
+		createUser(w, r)
+	}
+})",Medium,https://pkg.go.dev/net/http#ServeMux
+3,Path Parameters,Use curly brace patterns for path parameters,"Go 1.22+ supports path parameters in ServeMux patterns using {name} syntax, accessed via r.PathValue().",Use {name} in route patterns and r.PathValue() to extract parameters.,Do not manually parse r.URL.Path to extract path segments when the mux supports named parameters.,"mux.HandleFunc(""GET /users/{id}"", func(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue(""id"")
+	fmt.Fprintf(w, ""user: %s"", id)
+})","mux.HandleFunc(""/users/"", func(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(r.URL.Path, ""/"")
+	id := parts[len(parts)-1]
+	fmt.Fprintf(w, ""user: %s"", id)
+})",Medium,https://pkg.go.dev/net/http#Request.PathValue
+4,http.Handler Interface,Implement http.Handler for stateful handlers,"Use the http.Handler interface with a struct receiver when handlers need access to dependencies like database connections, loggers, or configuration.",Define a struct with dependencies and implement ServeHTTP to access them without globals.,Do not use global variables for dependencies as it makes testing difficult and introduces coupling.,"type UserHandler struct {
+	DB     *sql.DB
+	Logger *slog.Logger
+}
+
+func (h *UserHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	users, err := h.DB.QueryContext(r.Context(), ""SELECT name FROM users"")
+	if err != nil {
+		http.Error(w, ""db error"", http.StatusInternalServerError)
+		return
+	}
+	defer users.Close()
+	// process rows
+}
+
+mux.Handle(""GET /users"", &UserHandler{DB: db, Logger: logger})","var globalDB *sql.DB
+
+func listUsers(w http.ResponseWriter, r *http.Request) {
+	users, _ := globalDB.Query(""SELECT name FROM users"")
+	defer users.Close()
+	// process rows
+}",High,https://pkg.go.dev/net/http#Handler
+5,http.HandlerFunc Adapter,Use http.HandlerFunc for simple handlers,"Use http.HandlerFunc to convert a plain function with the signature func(http.ResponseWriter, *http.Request) into an http.Handler.",Use HandleFunc for simple stateless handlers that do not need struct dependencies.,Do not wrap simple functions in unnecessary structs when HandleFunc is sufficient.,"mux.HandleFunc(""GET /ping"", func(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(""pong""))
+})","type PingHandler struct{}
+
+func (h *PingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(""pong""))
+}
+
+mux.Handle(""GET /ping"", &PingHandler{})",Low,https://pkg.go.dev/net/http#HandlerFunc
+6,Middleware Chaining,Use func(http.Handler) http.Handler pattern,"Write middleware as functions that accept an http.Handler and return a new http.Handler, enabling composable handler chains.",Return a new http.Handler that wraps the original and calls next.ServeHTTP to continue the chain.,Do not put cross-cutting concerns directly in each handler as it leads to duplicated code.,"func loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		next.ServeHTTP(w, r)
+		slog.Info(""request"", ""method"", r.Method, ""path"", r.URL.Path, ""duration"", time.Since(start))
+	})
+}
+
+srv := &http.Server{
+	Addr:    "":8080"",
+	Handler: loggingMiddleware(mux),
+}","func listUsers(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	// handler logic
+	slog.Info(""request"", ""duration"", time.Since(start))
+}
+
+func createUser(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	// handler logic
+	slog.Info(""request"", ""duration"", time.Since(start))
+}",High,https://pkg.go.dev/net/http#Handler
+7,Request Context,Propagate r.Context() to downstream calls,"Pass r.Context() to database queries, HTTP calls, and other blocking operations so they respect request cancellation and deadlines.",Always pass r.Context() to functions that accept a context.Context parameter.,Do not use context.Background() or context.TODO() inside handlers as it ignores client disconnection.,"func getUser(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	row := db.QueryRowContext(ctx, ""SELECT name FROM users WHERE id = $1"", r.PathValue(""id""))
+	var name string
+	if err := row.Scan(&name); err != nil {
+		http.Error(w, ""not found"", http.StatusNotFound)
+		return
+	}
+	fmt.Fprint(w, name)
+}","func getUser(w http.ResponseWriter, r *http.Request) {
+	row := db.QueryRow(""SELECT name FROM users WHERE id = $1"", r.PathValue(""id""))
+	var name string
+	row.Scan(&name)
+	fmt.Fprint(w, name)
+}",High,https://pkg.go.dev/net/http#Request.Context
+8,JSON Response,Use json.NewEncoder for JSON responses,"Encode JSON responses by setting Content-Type to application/json and using json.NewEncoder(w).Encode for streaming efficiency.",Set Content-Type header before writing the body and use json.NewEncoder to stream directly to the writer.,Do not use json.Marshal followed by w.Write as it creates an unnecessary intermediate byte slice.,"type User struct {
+	Name  string `json:""name""`
+	Email string `json:""email""`
+}
+
+func getUser(w http.ResponseWriter, r *http.Request) {
+	user := User{Name: ""Alice"", Email: ""alice@example.com""}
+	w.Header().Set(""Content-Type"", ""application/json"")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(user)
+}","func getUser(w http.ResponseWriter, r *http.Request) {
+	user := User{Name: ""Alice"", Email: ""alice@example.com""}
+	data, _ := json.Marshal(user)
+	w.Write(data)
+}",Medium,https://pkg.go.dev/encoding/json#NewEncoder
+9,Request Parsing,Use json.NewDecoder for request body parsing,"Decode JSON request bodies using json.NewDecoder(r.Body).Decode which streams directly from the reader without buffering the entire body.",Use json.NewDecoder(r.Body).Decode(&v) and enable DisallowUnknownFields for strict parsing.,Do not use io.ReadAll followed by json.Unmarshal as it loads the full body into memory.,"func createUser(w http.ResponseWriter, r *http.Request) {
+	var u User
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&u); err != nil {
+		http.Error(w, ""invalid JSON"", http.StatusBadRequest)
+		return
+	}
+	w.Header().Set(""Content-Type"", ""application/json"")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(u)
+}","func createUser(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body)
+	var u User
+	json.Unmarshal(body, &u)
+	data, _ := json.Marshal(u)
+	w.WriteHeader(http.StatusCreated)
+	w.Write(data)
+}",Medium,https://pkg.go.dev/encoding/json#NewDecoder
+10,Error Responses,Use http.Error for error responses,"Use http.Error to send plain text error responses with the correct status code and Content-Type header set automatically.",Use http.Error(w, message, statusCode) for simple error responses and return immediately after.,Do not forget to return after writing an error response as the handler will continue executing.,"func getUser(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue(""id"")
+	user, err := findUser(r.Context(), id)
+	if err != nil {
+		http.Error(w, ""user not found"", http.StatusNotFound)
+		return
+	}
+	w.Header().Set(""Content-Type"", ""application/json"")
+	json.NewEncoder(w).Encode(user)
+}","func getUser(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue(""id"")
+	user, err := findUser(r.Context(), id)
+	if err != nil {
+		http.Error(w, ""user not found"", http.StatusNotFound)
+		// missing return: handler continues
+	}
+	w.Header().Set(""Content-Type"", ""application/json"")
+	json.NewEncoder(w).Encode(user)
+}",Critical,https://pkg.go.dev/net/http#Error
+11,Static Files,Use http.FileServer with embed.FS,"Serve static files using http.FileServer combined with go:embed for self-contained binaries, or with http.Dir for development.",Use embed.FS with http.FileServer for production to bundle assets into the binary.,Do not serve files by reading them manually with os.ReadFile inside handlers.,"//go:embed static/*
+var staticFiles embed.FS
+
+func main() {
+	mux := http.NewServeMux()
+	fs := http.FileServerFS(staticFiles)
+	mux.Handle(""GET /static/"", fs)
+}","mux.HandleFunc(""GET /static/"", func(w http.ResponseWriter, r *http.Request) {
+	path := ""."" + r.URL.Path
+	data, err := os.ReadFile(path)
+	if err != nil {
+		http.Error(w, ""not found"", 404)
+		return
+	}
+	w.Write(data)
+})",Medium,https://pkg.go.dev/net/http#FileServer
+12,http.Server Config,Configure timeouts and TLS on http.Server,"Always create an explicit http.Server struct with read, write, and idle timeouts to prevent slow client attacks and resource exhaustion.",Set ReadTimeout, WriteTimeout, and IdleTimeout on the Server struct.,Do not use http.ListenAndServe as it creates a server with no timeouts.,"srv := &http.Server{
+	Addr:         "":8080"",
+	Handler:      mux,
+	ReadTimeout:  5 * time.Second,
+	WriteTimeout: 10 * time.Second,
+	IdleTimeout:  120 * time.Second,
+}
+log.Fatal(srv.ListenAndServe())","log.Fatal(http.ListenAndServe("":8080"", mux))",Critical,https://pkg.go.dev/net/http#Server
+13,Graceful Shutdown,Use server.Shutdown for graceful stop,"Call server.Shutdown(ctx) on OS signal to stop accepting new connections and wait for in-flight requests to complete before exiting.",Listen for SIGINT/SIGTERM in a goroutine and call Shutdown with a deadline context.,Do not kill the process without graceful shutdown as active requests will be dropped.,"srv := &http.Server{Addr: "":8080"", Handler: mux}
+
+go func() {
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	<-sigCh
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Fatal(err)
+	}
+}()
+
+if err := srv.ListenAndServe(); err != http.ErrServerClosed {
+	log.Fatal(err)
+}","srv := &http.Server{Addr: "":8080"", Handler: mux}
+log.Fatal(srv.ListenAndServe())
+// Ctrl+C kills immediately",High,https://pkg.go.dev/net/http#Server.Shutdown
+14,Testing,Use httptest.NewServer and httptest.NewRecorder,"Use the httptest package for handler testing without starting a real server, enabling fast and deterministic tests.",Use httptest.NewRecorder for unit tests and httptest.NewServer for integration tests.,Do not start a real server in tests with ListenAndServe as it is slow and binds ports.,"func TestGetUser(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc(""GET /users/{id}"", getUser)
+
+	req := httptest.NewRequest(http.MethodGet, ""/users/42"", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf(""expected 200 got %d"", w.Code)
+	}
+}","func TestGetUser(t *testing.T) {
+	go http.ListenAndServe("":9999"", mux)
+	time.Sleep(time.Second)
+	resp, _ := http.Get(""http://localhost:9999/users/42"")
+	// ...
+}",High,https://pkg.go.dev/net/http/httptest#NewRecorder
+15,Response Writer,Understand http.ResponseWriter write order,"Headers must be set before calling WriteHeader, and WriteHeader must be called before Write. Violating this order causes silent bugs.",Set headers first then call WriteHeader then call Write in that exact order.,Do not call w.Write before w.WriteHeader or set headers after WriteHeader as they will be ignored.,"func handler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set(""Content-Type"", ""application/json"")
+	w.Header().Set(""X-Request-Id"", ""abc123"")
+	w.WriteHeader(http.StatusCreated)
+	w.Write([]byte(`{""status"":""created""}`))
+}","func handler(w http.ResponseWriter, r *http.Request) {
+	w.Write([]byte(`{""status"":""created""}`))
+	w.WriteHeader(http.StatusCreated) // too late, 200 already sent
+	w.Header().Set(""Content-Type"", ""application/json"") // ignored
+}",High,https://pkg.go.dev/net/http#ResponseWriter
+16,Custom Middleware,Build logging and recovery middleware,"Write reusable middleware for logging, authentication, and panic recovery using the func(http.Handler) http.Handler pattern.",Chain middleware by wrapping handlers and use defer/recover for panic safety.,Do not let panics in handlers crash the server without recovery middleware.,"func recoveryMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if err := recover(); err != nil {
+				slog.Error(""panic recovered"", ""error"", err)
+				http.Error(w, ""internal server error"", http.StatusInternalServerError)
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
+srv := &http.Server{
+	Addr:    "":8080"",
+	Handler: recoveryMiddleware(loggingMiddleware(mux)),
+}","// no recovery - panic crashes the server
+srv := &http.Server{
+	Addr:    "":8080"",
+	Handler: mux,
+}",Critical,https://pkg.go.dev/net/http#Handler
+17,File Upload,Use r.FormFile for file uploads,"Handle file uploads using r.FormFile which returns the file, its header, and any error for safe processing.",Call r.ParseMultipartForm to set a memory limit and validate file metadata before saving.,Do not read the entire multipart body manually or skip size limits.,"func uploadHandler(w http.ResponseWriter, r *http.Request) {
+	r.ParseMultipartForm(10 << 20) // 10 MB max
+	file, header, err := r.FormFile(""document"")
+	if err != nil {
+		http.Error(w, ""no file uploaded"", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	dst, err := os.Create(filepath.Join(""./uploads"", header.Filename))
+	if err != nil {
+		http.Error(w, ""cannot save file"", http.StatusInternalServerError)
+		return
+	}
+	defer dst.Close()
+	io.Copy(dst, file)
+	w.WriteHeader(http.StatusCreated)
+}","func uploadHandler(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body) // reads entire body into memory
+	os.WriteFile(""upload.bin"", body, 0644)
+	w.WriteHeader(http.StatusCreated)
+}",High,https://pkg.go.dev/net/http#Request.FormFile
+18,Server-Sent Events,Use http.Flusher for streaming responses,"Implement Server-Sent Events by checking if the ResponseWriter implements http.Flusher and calling Flush after each event.",Set appropriate headers for SSE and call flusher.Flush() after each write to push data immediately.,Do not buffer the entire response before sending as the client will not receive real-time updates.,"func sseHandler(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, ""streaming not supported"", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set(""Content-Type"", ""text/event-stream"")
+	w.Header().Set(""Cache-Control"", ""no-cache"")
+	w.Header().Set(""Connection"", ""keep-alive"")
+
+	for i := 0; i < 10; i++ {
+		fmt.Fprintf(w, ""data: message %d\n\n"", i)
+		flusher.Flush()
+		time.Sleep(time.Second)
+	}
+}","func sseHandler(w http.ResponseWriter, r *http.Request) {
+	var buf bytes.Buffer
+	for i := 0; i < 10; i++ {
+		fmt.Fprintf(&buf, ""data: message %d\n\n"", i)
+		time.Sleep(time.Second)
+	}
+	w.Write(buf.Bytes()) // client waits 10 seconds for everything
+}",Medium,https://pkg.go.dev/net/http#Flusher
+19,HTTP/2,Use TLS for automatic HTTP/2 support,"Go's net/http server automatically supports HTTP/2 when TLS is enabled via ListenAndServeTLS, with no extra configuration needed.",Use ListenAndServeTLS with valid certificates to get HTTP/2 automatically.,Do not try to configure HTTP/2 manually or use third-party packages when TLS gives it for free.,"srv := &http.Server{
+	Addr:    "":443"",
+	Handler: mux,
+}
+log.Fatal(srv.ListenAndServeTLS(""cert.pem"", ""key.pem""))","// Trying to use HTTP/2 without TLS in production
+srv := &http.Server{
+	Addr:    "":8080"",
+	Handler: mux,
+}
+log.Fatal(srv.ListenAndServe()) // HTTP/1.1 only",Medium,https://pkg.go.dev/net/http#Server.ListenAndServeTLS
+20,Connection Hijacking,Use http.Hijacker for WebSocket upgrades,"Use the http.Hijacker interface to take over the TCP connection for protocols like WebSocket that require bidirectional communication.",Check that the ResponseWriter implements http.Hijacker before hijacking and handle the raw connection properly.,Do not try to use the ResponseWriter after hijacking as the server no longer manages the connection.,"func wsHandler(w http.ResponseWriter, r *http.Request) {
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, ""hijacking not supported"", http.StatusInternalServerError)
+		return
+	}
+	conn, bufrw, err := hj.Hijack()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer conn.Close()
+	bufrw.WriteString(""HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n"")
+	bufrw.Flush()
+	// handle raw connection
+}","func wsHandler(w http.ResponseWriter, r *http.Request) {
+	hj, _ := w.(http.Hijacker)
+	conn, _, _ := hj.Hijack()
+	defer conn.Close()
+	w.WriteHeader(200) // BUG: cannot use ResponseWriter after Hijack
+}",Medium,https://pkg.go.dev/net/http#Hijacker
+21,Context Values,Use request-scoped context values carefully,"Store request-scoped data like authenticated user info in the request context using context.WithValue and retrieve with typed keys.",Define unexported typed keys to avoid collisions and use helper functions for type-safe access.,Do not use string keys for context values as they risk collisions with other packages.,"type contextKey int
+
+const userIDKey contextKey = iota
+
+func withUserID(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), userIDKey, ""user-123"")
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+func getUserID(ctx context.Context) string {
+	v, _ := ctx.Value(userIDKey).(string)
+	return v
+}","func withUserID(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), ""userID"", ""user-123"")
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}",High,https://pkg.go.dev/context#WithValue
+22,MaxBytesReader,Limit request body size with MaxBytesReader,"Wrap the request body with http.MaxBytesReader to enforce a maximum body size and prevent memory exhaustion from oversized payloads.",Use http.MaxBytesReader before parsing the body to enforce a hard limit on request size.,Do not rely on Content-Length headers alone as clients can send bodies larger than declared.,"func createHandler(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB limit
+	var payload Payload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, ""request body too large"", http.StatusRequestEntityTooLarge)
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
+}","func createHandler(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body) // no limit, can exhaust memory
+	var payload Payload
+	json.Unmarshal(body, &payload)
+	w.WriteHeader(http.StatusCreated)
+}",High,https://pkg.go.dev/net/http#MaxBytesReader
+23,Template Rendering,Use html/template with embed.FS,"Render HTML templates using html/template which auto-escapes output, combined with embed.FS for bundling templates into the binary.",Parse templates once at startup using template.ParseFS and call Execute in handlers.,Do not parse templates on every request as it wastes CPU and increases latency.,"//go:embed templates/*.html
+var templateFS embed.FS
+
+var tmpl = template.Must(template.ParseFS(templateFS, ""templates/*.html""))
+
+func homeHandler(w http.ResponseWriter, r *http.Request) {
+	data := map[string]string{""Title"": ""Home""}
+	w.Header().Set(""Content-Type"", ""text/html"")
+	tmpl.ExecuteTemplate(w, ""index.html"", data)
+}","func homeHandler(w http.ResponseWriter, r *http.Request) {
+	tmpl, _ := template.ParseFiles(""templates/index.html"") // parsed every request
+	tmpl.Execute(w, map[string]string{""Title"": ""Home""})
+}",Medium,https://pkg.go.dev/html/template
+24,Reverse Proxy,Use httputil.ReverseProxy for proxying,"Use httputil.NewSingleHostReverseProxy to forward requests to backend services, handling path rewriting and header propagation automatically.",Configure the proxy with proper timeouts and error handling via the Transport and ErrorHandler fields.,Do not build a custom proxy by making http.Get calls inside handlers as it misses headers and streaming.,"func proxyHandler() http.Handler {
+	target, _ := url.Parse(""http://backend:9090"")
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.Transport = &http.Transport{
+		MaxIdleConns:       100,
+		IdleConnTimeout:    90 * time.Second,
+	}
+	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		http.Error(w, ""bad gateway"", http.StatusBadGateway)
+	}
+	return proxy
+}
+
+mux.Handle(""/api/"", proxyHandler())","mux.HandleFunc(""/api/"", func(w http.ResponseWriter, r *http.Request) {
+	resp, _ := http.Get(""http://backend:9090"" + r.URL.Path)
+	body, _ := io.ReadAll(resp.Body)
+	w.Write(body)
+})",High,https://pkg.go.dev/net/http/httputil#NewSingleHostReverseProxy
+25,Health Check Endpoint,Implement a simple health check handler,"Provide a /healthz endpoint that returns 200 OK for load balancers, orchestrators, and monitoring systems to verify the service is running.",Return a simple 200 response with optional JSON body indicating service status and dependencies.,Do not perform expensive operations in the health check as it is called frequently by infrastructure.,"mux.HandleFunc(""GET /healthz"", func(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set(""Content-Type"", ""application/json"")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{""status"": ""ok""})
+})","mux.HandleFunc(""GET /healthz"", func(w http.ResponseWriter, r *http.Request) {
+	// Running full DB migration check on every health probe
+	if err := db.RunMigrations(); err != nil {
+		http.Error(w, ""unhealthy"", 500)
+		return
+	}
+	w.Write([]byte(""ok""))
+})",Medium,https://pkg.go.dev/net/http#ServeMux

@@ -1,0 +1,276 @@
+No,Category,Guideline,Description,Do,Dont,Code Good,Code Bad,Severity,Docs URL
+1,App Setup,Use fiber.New() with Config,"Initialize Fiber with explicit configuration for production readiness, including read/write timeouts and body limits.",Always pass a fiber.Config struct to fiber.New() to control server behavior.,Do not call fiber.New() without config in production.,"app := fiber.New(fiber.Config{ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, BodyLimit: 4 * 1024 * 1024, ServerHeader: ""MyApp"", AppName: ""MyApp v1.0""})",app := fiber.New(),High,https://docs.gofiber.io/api/fiber
+2,Routing,Use explicit HTTP method handlers,"Register routes with app.Get, app.Post, app.Put, app.Delete for clarity and type safety.",Use specific method handlers like app.Get() and app.Post() for each route.,Do not use app.All() for routes that should only accept specific methods.,"app.Get(""/users"", getUsers)
+app.Post(""/users"", createUser)","app.All(""/users"", handleUsers)",Medium,https://docs.gofiber.io/api/app#route-handlers
+3,Route Groups,Use app.Group for route organization,"Group related routes under a common prefix to keep routing organized, apply group-level middleware, and avoid path repetition.",Use app.Group() to organize related endpoints under a shared prefix.,Do not repeat the same prefix string across dozens of individual route registrations.,"api := app.Group(""/api"")
+v1 := api.Group(""/v1"")
+v1.Get(""/users"", getUsers)
+v1.Get(""/posts"", getPosts)","app.Get(""/api/v1/users"", getUsers)
+app.Get(""/api/v1/posts"", getPosts)",Medium,https://docs.gofiber.io/guide/grouping
+4,Middleware,Use app.Use for global middleware,"Register middleware with app.Use to run logic before or after handlers, such as logging, CORS, and recovery.",Register global middleware at the top before route definitions so all routes benefit.,Do not register global middleware after route definitions as it will not apply to routes defined above it.,"app.Use(logger.New())
+app.Use(recover.New())
+app.Get(""/ping"", ping)","app.Get(""/ping"", ping)
+app.Use(logger.New())",High,https://docs.gofiber.io/api/app#middleware
+5,Custom Middleware,Use fiber.Handler signature for custom middleware,"Write custom middleware using the func(c *fiber.Ctx) error signature and call c.Next() to pass control to the next handler.",Return c.Next() to continue the chain and handle errors returned by downstream handlers.,Do not forget to call c.Next() or the request will hang without reaching the intended handler.,"func AuthMiddleware(c *fiber.Ctx) error {
+	token := c.Get(""Authorization"")
+	if token == """" {
+		return c.SendStatus(fiber.StatusUnauthorized)
+	}
+	return c.Next()
+}","func AuthMiddleware(c *fiber.Ctx) error {
+	token := c.Get(""Authorization"")
+	if token == """" {
+		return c.SendStatus(fiber.StatusUnauthorized)
+	}
+	// missing c.Next()
+	return nil
+}",High,https://docs.gofiber.io/guide/middleware
+6,Context,Understand fiber.Ctx lifecycle,"fiber.Ctx is reused across requests for performance. Do not store references to it outside the handler scope unless you copy values.",Copy values from c using c.Copy() or extract primitives before passing to goroutines.,Do not pass *fiber.Ctx to a goroutine or store it beyond the handler lifetime.,"func handler(c *fiber.Ctx) error {
+	id := c.Params(""id"")
+	go processAsync(id)
+	return c.SendStatus(fiber.StatusAccepted)
+}","func handler(c *fiber.Ctx) error {
+	go func(ctx *fiber.Ctx) {
+		processAsync(ctx.Params(""id""))
+	}(c)
+	return c.SendStatus(fiber.StatusAccepted)
+}",Critical,https://docs.gofiber.io/api/ctx
+7,Request Parsing,Use c.BodyParser for structured input,"Parse JSON, XML, or form bodies into Go structs using c.BodyParser for type-safe access.",Define a struct matching the expected body and use c.BodyParser(&struct) to decode.,Do not manually read c.Body() and unmarshal when c.BodyParser handles it automatically.,"type CreateUser struct {
+	Name  string `json:""name""`
+	Email string `json:""email""`
+}
+
+func createUser(c *fiber.Ctx) error {
+	var u CreateUser
+	if err := c.BodyParser(&u); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, err.Error())
+	}
+	return c.JSON(u)
+}","func createUser(c *fiber.Ctx) error {
+	body := c.Body()
+	var u map[string]interface{}
+	json.Unmarshal(body, &u)
+	return c.JSON(u)
+}",High,https://docs.gofiber.io/api/ctx#bodyparser
+8,Validation,Integrate go-playground/validator,"Use the validator package to validate parsed structs, returning structured error messages for invalid input.",Create a shared validator instance and call validate.Struct() after parsing the request body.,Do not skip validation and trust raw client input directly.,"import ""github.com/go-playground/validator/v10""
+
+var validate = validator.New()
+
+func createUser(c *fiber.Ctx) error {
+	var u CreateUser
+	if err := c.BodyParser(&u); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, err.Error())
+	}
+	if err := validate.Struct(&u); err != nil {
+		return fiber.NewError(fiber.StatusUnprocessableEntity, err.Error())
+	}
+	return c.JSON(u)
+}","func createUser(c *fiber.Ctx) error {
+	var u CreateUser
+	c.BodyParser(&u)
+	// no validation at all
+	return c.JSON(u)
+}",High,https://pkg.go.dev/github.com/go-playground/validator/v10
+9,Response,Use c.JSON and c.SendString for responses,"Return responses using the built-in helpers that set correct Content-Type headers automatically.",Use c.JSON() for structured data and c.SendString() for plain text responses.,Do not manually set Content-Type and write bytes when helpers exist.,"func getUser(c *fiber.Ctx) error {
+	user := User{Name: ""Alice"", Email: ""alice@example.com""}
+	return c.JSON(user)
+}","func getUser(c *fiber.Ctx) error {
+	user := User{Name: ""Alice"", Email: ""alice@example.com""}
+	data, _ := json.Marshal(user)
+	c.Set(""Content-Type"", ""application/json"")
+	return c.Send(data)
+}",Medium,https://docs.gofiber.io/api/ctx#json
+10,Error Handling,Use fiber.NewError for HTTP errors,"Create HTTP errors with fiber.NewError to leverage Fiber's built-in error handler which formats error responses consistently.",Use fiber.NewError(statusCode) to signal errors and let the error handler format the response.,Do not manually write error responses in every handler; centralize via the error handler.,"func getUser(c *fiber.Ctx) error {
+	user, err := db.FindUser(c.Params(""id""))
+	if err != nil {
+		return fiber.NewError(fiber.StatusNotFound, ""user not found"")
+	}
+	return c.JSON(user)
+}","func getUser(c *fiber.Ctx) error {
+	user, err := db.FindUser(c.Params(""id""))
+	if err != nil {
+		c.Status(404)
+		return c.JSON(fiber.Map{""error"": ""user not found""})
+	}
+	return c.JSON(user)
+}",Medium,https://docs.gofiber.io/guide/error-handling
+11,Static Files,Use app.Static for serving files,"Serve static assets like CSS, JS, and images using app.Static which supports index files, caching, and byte range requests.",Use app.Static() with a prefix and root directory for static asset serving.,Do not write custom handlers to read and serve files from disk manually.,"app.Static(""/static"", ""./public"", fiber.Static{
+	Compress:  true,
+	ByteRange: true,
+	Browse:    false,
+	MaxAge:    3600,
+})","app.Get(""/static/*"", func(c *fiber.Ctx) error {
+	path := ""./public/"" + c.Params(""*"")
+	data, _ := os.ReadFile(path)
+	return c.Send(data)
+})",Medium,https://docs.gofiber.io/api/app#static
+12,Rate Limiter,Use limiter middleware to protect endpoints,"Apply rate limiting to prevent abuse, brute force attacks, and excessive resource consumption on public endpoints.",Configure the limiter middleware with Max requests and Expiration window.,Do not leave public endpoints unprotected without any form of rate limiting.,"import ""github.com/gofiber/fiber/v2/middleware/limiter""
+
+app.Use(limiter.New(limiter.Config{
+	Max:        20,
+	Expiration: 30 * time.Second,
+	LimitReached: func(c *fiber.Ctx) error {
+		return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{""error"": ""rate limit exceeded""})
+	},
+}))","// no rate limiting at all
+app.Get(""/login"", loginHandler)",High,https://docs.gofiber.io/api/middleware/limiter
+13,CORS,Use cors middleware for cross-origin requests,"Enable CORS with explicit origins and allowed methods to support frontend clients on different domains.",Specify AllowOrigins explicitly to restrict cross-origin access to known domains.,Do not set AllowOrigins to * in production as it permits any domain to access your API.,"import ""github.com/gofiber/fiber/v2/middleware/cors""
+
+app.Use(cors.New(cors.Config{
+	AllowOrigins: ""https://example.com, https://app.example.com"",
+	AllowMethods: ""GET,POST,PUT,DELETE"",
+	AllowHeaders: ""Origin, Content-Type, Authorization"",
+}))","app.Use(cors.New(cors.Config{
+	AllowOrigins: ""*"",
+}))",High,https://docs.gofiber.io/api/middleware/cors
+14,Logger,Use logger middleware for request logging,"Log incoming requests with method, path, status, and latency for observability and debugging.",Use the built-in logger middleware with a custom format that includes relevant request metadata.,Do not use fmt.Println inside handlers for logging as it lacks structure and context.,"import ""github.com/gofiber/fiber/v2/middleware/logger""
+
+app.Use(logger.New(logger.Config{
+	Format:     ""${time} | ${status} | ${latency} | ${method} | ${path}\n"",
+	TimeFormat: ""2006-01-02 15:04:05"",
+}))","app.Use(func(c *fiber.Ctx) error {
+	fmt.Println(c.Method(), c.Path())
+	return c.Next()
+})",Medium,https://docs.gofiber.io/api/middleware/logger
+15,Recovery,Use recover middleware to prevent crashes,"Catch panics in handlers and middleware to prevent the entire server from crashing on unexpected errors.",Register recover middleware early in the middleware chain so it wraps all downstream handlers.,Do not leave handlers without panic recovery as a single panic will crash the process.,"import ""github.com/gofiber/fiber/v2/middleware/recover""
+
+app.Use(recover.New(recover.Config{
+	EnableStackTrace: true,
+}))","// no panic recovery
+app.Get(""/risky"", riskyHandler)",Critical,https://docs.gofiber.io/api/middleware/recover
+16,Cache Middleware,Use cache middleware for GET responses,"Cache GET responses in memory or external stores to reduce latency and backend load for frequently accessed data.",Apply cache middleware selectively to GET endpoints that return data safe to cache.,Do not cache POST/PUT/DELETE endpoints or responses containing user-specific private data.,"import ""github.com/gofiber/fiber/v2/middleware/cache""
+
+app.Use(cache.New(cache.Config{
+	Next: func(c *fiber.Ctx) bool {
+		return c.Query(""noCache"") == ""true""
+	},
+	Expiration:   30 * time.Minute,
+	CacheControl: true,
+}))","// caching all routes including mutations
+app.Use(cache.New())",Medium,https://docs.gofiber.io/api/middleware/cache
+17,Prefork,Use Prefork for multi-core utilization,"Enable Prefork mode to spawn multiple Go processes, each bound to a CPU core, for maximum throughput on multi-core servers.",Enable Prefork in production behind a reverse proxy where shared state is stored externally.,Do not use Prefork with in-memory state like local caches or session maps since each process has its own memory space.,"app := fiber.New(fiber.Config{
+	Prefork: true,
+})
+// Use Redis for shared state
+// Use external session store","app := fiber.New(fiber.Config{
+	Prefork: true,
+})
+var sessions = map[string]Session{} // not shared across forks",High,https://docs.gofiber.io/api/fiber#config
+18,File Upload,Use c.FormFile for file uploads,"Handle file uploads using c.FormFile to access uploaded files and c.SaveFile to persist them to disk.",Validate file size and content type before saving and use c.SaveFile for safe writes.,Do not save files without checking size or type as it exposes the server to abuse.,"func uploadHandler(c *fiber.Ctx) error {
+	file, err := c.FormFile(""document"")
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, ""no file uploaded"")
+	}
+	if file.Size > 10*1024*1024 {
+		return fiber.NewError(fiber.StatusRequestEntityTooLarge, ""file too large"")
+	}
+	dst := fmt.Sprintf(""./uploads/%s"", file.Filename)
+	return c.SaveFile(file, dst)
+}","func uploadHandler(c *fiber.Ctx) error {
+	file, _ := c.FormFile(""document"")
+	dst := fmt.Sprintf(""./uploads/%s"", file.Filename)
+	c.SaveFile(file, dst)
+	return c.SendString(""ok"")
+}",High,https://docs.gofiber.io/api/ctx#formfile
+19,WebSocket,Use websocket middleware for real-time communication,"Use the gofiber/websocket/v2 package to upgrade HTTP connections to WebSocket for bidirectional real-time messaging.",Check the IsWebSocketUpgrade header before upgrading and handle connection lifecycle properly.,Do not skip the upgrade check as non-WebSocket requests will fail unexpectedly.,"import ""github.com/gofiber/websocket/v2""
+
+app.Use(""/ws"", func(c *fiber.Ctx) error {
+	if websocket.IsWebSocketUpgrade(c) {
+		return c.Next()
+	}
+	return fiber.ErrUpgradeRequired
+})
+
+app.Get(""/ws"", websocket.New(func(c *websocket.Conn) {
+	for {
+		mt, msg, err := c.ReadMessage()
+		if err != nil {
+			break
+		}
+		c.WriteMessage(mt, msg)
+	}
+}))","app.Get(""/ws"", websocket.New(func(c *websocket.Conn) {
+	for {
+		mt, msg, _ := c.ReadMessage()
+		c.WriteMessage(mt, msg)
+	}
+}))",Medium,https://docs.gofiber.io/api/middleware/websocket
+20,Template Engine,Use app.Config.Views for server-side rendering,"Configure a template engine via fiber.Config.Views to render HTML templates with data binding and layouts.",Set the Views field in fiber.Config to a template engine like html or pug and use c.Render().,Do not manually read template files and execute them inside handlers.,"import ""github.com/gofiber/template/html/v2""
+
+engine := html.New(""./views"", "".html"")
+
+app := fiber.New(fiber.Config{
+	Views: engine,
+})
+
+app.Get(""/"", func(c *fiber.Ctx) error {
+	return c.Render(""index"", fiber.Map{""Title"": ""Home""})
+})","app.Get(""/"", func(c *fiber.Ctx) error {
+	tmpl, _ := template.ParseFiles(""./views/index.html"")
+	var buf bytes.Buffer
+	tmpl.Execute(&buf, map[string]string{""Title"": ""Home""})
+	c.Set(""Content-Type"", ""text/html"")
+	return c.SendString(buf.String())
+})",Medium,https://docs.gofiber.io/guide/templates
+21,Testing,Use app.Test() for handler testing,"Fiber provides app.Test() to send http.Request objects directly to the app without starting a server, enabling fast unit tests.",Use app.Test() with httptest.NewRequest to test routes without binding to a port.,Do not start a real server with app.Listen in tests as it is slow and binds a port.,"func TestGetUser(t *testing.T) {
+	app := fiber.New()
+	app.Get(""/user"", getUser)
+
+	req := httptest.NewRequest(http.MethodGet, ""/user"", nil)
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != fiber.StatusOK {
+		t.Fatalf(""expected 200 got %d"", resp.StatusCode)
+	}
+}","func TestGetUser(t *testing.T) {
+	app := fiber.New()
+	app.Get(""/user"", getUser)
+	go app.Listen("":3000"")
+	time.Sleep(time.Second)
+	resp, _ := http.Get(""http://localhost:3000/user"")
+	// ...
+}",High,https://docs.gofiber.io/api/app#test
+22,Monitor,Use monitor middleware for runtime metrics,"Expose a monitoring endpoint that shows real-time server metrics such as CPU, memory, response times, and active connections.",Mount the monitor middleware on a protected admin route to view server health.,Do not expose the monitor endpoint publicly without authentication.,"import ""github.com/gofiber/fiber/v2/middleware/monitor""
+
+admin := app.Group(""/admin"", authMiddleware)
+admin.Get(""/metrics"", monitor.New(monitor.Config{
+	Title: ""MyApp Metrics"",
+}))","app.Get(""/metrics"", monitor.New()) // publicly accessible",Medium,https://docs.gofiber.io/api/middleware/monitor
+23,Graceful Shutdown,Handle os.Signal and call app.Shutdown,"Listen for SIGINT and SIGTERM signals to gracefully shut down the server, allowing in-flight requests to complete.",Use a goroutine to listen for OS signals and call app.ShutdownWithTimeout for a clean stop.,Do not call app.Listen without a shutdown mechanism as killing the process drops active connections.,"sigCh := make(chan os.Signal, 1)
+signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+go func() {
+	<-sigCh
+	log.Println(""shutting down..."")
+	if err := app.ShutdownWithTimeout(5 * time.Second); err != nil {
+		log.Fatal(err)
+	}
+}()
+
+if err := app.Listen("":3000""); err != nil {
+	log.Fatal(err)
+}","if err := app.Listen("":3000""); err != nil {
+	log.Fatal(err)
+}
+// no graceful shutdown",High,https://docs.gofiber.io/api/app#shutdown
+24,Production Config,Set Prefork and ProxyHeader for production,"Configure Fiber for production by enabling Prefork, setting ProxyHeader for correct client IP behind a reverse proxy, and tuning timeouts.",Set ProxyHeader when running behind Nginx or a load balancer so c.IP() returns the real client IP.,Do not run without ProxyHeader behind a reverse proxy as c.IP() will always return the proxy address.,"app := fiber.New(fiber.Config{
+	Prefork:      true,
+	ProxyHeader:  ""X-Forwarded-For"",
+	ReadTimeout:  10 * time.Second,
+	WriteTimeout: 10 * time.Second,
+	IdleTimeout:  120 * time.Second,
+})","app := fiber.New() // default config in production behind proxy",High,https://docs.gofiber.io/api/fiber#config
+25,Zero Allocation,Copy fiber.Ctx values before async use,"Fiber reuses fiber.Ctx objects via sync.Pool for zero-allocation performance. Values derived from Ctx are only valid within the handler scope.",Use utils.CopyString or copy slices when passing Ctx-derived values to goroutines or storing them.,Do not hold references to c.Params() or c.Body() results beyond the handler as memory may be reused.,"func handler(c *fiber.Ctx) error {
+	name := utils.CopyString(c.Params(""name""))
+	body := make([]byte, len(c.Body()))
+	copy(body, c.Body())
+	go processAsync(name, body)
+	return c.SendStatus(fiber.StatusAccepted)
+}","func handler(c *fiber.Ctx) error {
+	name := c.Params(""name"")
+	body := c.Body()
+	go processAsync(name, body) // unsafe: memory reused
+	return c.SendStatus(fiber.StatusAccepted)
+}",Critical,https://docs.gofiber.io/extra/faq#zero-allocation

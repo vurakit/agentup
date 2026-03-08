@@ -1,0 +1,441 @@
+No,Idiom,Category,Keywords,Description,Do,Dont,Code Good,Code Bad,Docs URL
+1,MixedCaps Naming,Naming,"mixedcaps, camelCase, naming convention","Go uses MixedCaps or mixedCaps rather than underscores to write multiword names. Exported names start with uppercase, unexported with lowercase.",Use MixedCaps for all multiword identifiers,Use snake_case or SCREAMING_SNAKE_CASE,"func readFileContent() error {
+	return nil
+}
+
+func ReadFileContent() error {
+	return nil
+}","func read_file_content() error {
+	return nil
+}
+
+func Read_File_Content() error {
+	return nil
+}",https://go.dev/doc/effective_go#mixed-caps
+2,Acronym Naming (URL not Url),Naming,"acronym, initialism, URL, HTTP, ID","Acronyms and initialisms in Go should be all caps. Write URL not Url, HTTP not Http, ID not Id. This applies to both exported and unexported names.",Keep acronyms fully capitalized: URL HTTP ID JSON XML,Capitalize only the first letter of acronyms,"type HTTPClient struct {
+	BaseURL string
+	UserID  int
+}
+
+func ServeHTTP(w http.ResponseWriter, r *http.Request) {}","type HttpClient struct {
+	BaseUrl string
+	UserId  int
+}
+
+func ServeHttp(w http.ResponseWriter, r *http.Request) {}",https://go.dev/wiki/CodeReviewComments#initialisms
+3,Package Naming,Naming,"package, naming, short, concise","Package names should be short, concise, lowercase, single-word names. Avoid underscores, mixedCaps, or overly generic names like util or common.",Use short lowercase single-word package names,Use generic names like util or common or use underscores,"package http
+
+package json
+
+package bytes","package httpHelpers
+
+package json_utils
+
+package common",https://go.dev/blog/package-names
+4,Receiver Naming,Naming,"receiver, method, short, consistent","Method receivers should be short, typically one or two letters reflecting the type. Be consistent across methods. Never use generic names like this or self.",Use one or two letter abbreviations of the type name,"Use this, self, or me for receivers","type Client struct{}
+
+func (c *Client) Do() error {
+	return nil
+}
+
+func (c *Client) Close() error {
+	return nil
+}","type Client struct{}
+
+func (this *Client) Do() error {
+	return nil
+}
+
+func (self *Client) Close() error {
+	return nil
+}",https://go.dev/wiki/CodeReviewComments#receiver-names
+5,Always Check Errors,Error Handling,"error, check, handle, return","Every function that returns an error must have that error checked. Ignoring errors leads to silent failures and hard-to-debug issues in production.",Always check and handle returned errors,Discard errors with _ or ignore them entirely,"f, err := os.Open(""config.json"")
+if err != nil {
+	return fmt.Errorf(""open config: %w"", err)
+}
+defer f.Close()","f, _ := os.Open(""config.json"")
+defer f.Close()",https://go.dev/doc/effective_go#errors
+6,Wrap Errors with Context,Error Handling,"error, wrap, context, fmt.Errorf, %w","When returning errors from called functions, wrap them with additional context using fmt.Errorf and %w. This creates an error chain that aids debugging.",Wrap errors with descriptive context using fmt.Errorf and %w,Return bare errors without context,"func loadConfig(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf(""load config %s: %w"", path, err)
+	}
+	_ = data
+	return nil
+}","func loadConfig(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	_ = data
+	return nil
+}",https://go.dev/blog/go1.13-errors
+7,Zero Value Useful,Design,"zero value, default, initialization","Design types so their zero value is useful and ready to use without explicit initialization. sync.Mutex, bytes.Buffer, and slices all work at zero value.",Design structs where the zero value is valid and usable,Require constructor functions when zero values would suffice,"var mu sync.Mutex
+mu.Lock()
+defer mu.Unlock()
+
+var buf bytes.Buffer
+buf.WriteString(""hello"")","mu := NewMutex()
+mu.Lock()
+defer mu.Unlock()
+
+buf := NewBuffer()
+buf.WriteString(""hello"")",https://go.dev/doc/effective_go#allocation_new
+8,Composition over Inheritance,Design,"composition, embedding, interface, struct","Go does not support inheritance. Use struct embedding and interfaces to compose behaviors. This leads to more flexible and maintainable designs.",Compose types using embedding and interfaces,Try to simulate class hierarchies with deep embedding chains,"type Logger struct{}
+
+func (l *Logger) Log(msg string) { fmt.Println(msg) }
+
+type Server struct {
+	Logger
+	Addr string
+}
+
+s := Server{Addr: "":8080""}
+s.Log(""started"")","type BaseServer struct {
+	Addr string
+}
+type DerivedServer struct {
+	BaseServer
+}
+type SuperDerivedServer struct {
+	DerivedServer
+}",https://go.dev/doc/effective_go#embedding
+9,Accept Interfaces Return Structs,Design,"interface, struct, return, parameter","Functions should accept interface parameters for flexibility but return concrete struct types. This makes APIs easy to mock in tests and extend later.",Accept interfaces as parameters and return concrete types,Accept concrete types and return interfaces,"func Process(r io.Reader) (*Result, error) {
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return nil, err
+	}
+	return &Result{Data: data}, nil
+}","func Process(f *os.File) (io.Reader, error) {
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return nil, err
+	}
+	return &Result{Data: data}, nil
+}",https://go.dev/wiki/CodeReviewComments#interfaces
+10,Make Zero Value Useful,Design,"zero value, constructor, default state","Prefer designing types so they are immediately usable without constructor calls. This simplifies API usage and reduces the chance of nil pointer panics.",Design types that work correctly at their zero value,"Require New() constructors for types that could work as zero values","type Counter struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (c *Counter) Inc() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.n++
+}
+
+var c Counter
+c.Inc()","type Counter struct {
+	mu *sync.Mutex
+	n  int
+}
+
+func NewCounter() *Counter {
+	return &Counter{mu: &sync.Mutex{}}
+}",https://go.dev/talks/2012/zen.slide#8
+11,Don't Panic in Libraries,Error Handling,"panic, library, recover, error","Libraries should return errors instead of calling panic. Panics cross API boundaries and crash the entire program. Only panic for truly unrecoverable programmer errors.",Return errors from library functions,Use panic for expected error conditions in library code,"func Parse(s string) (Config, error) {
+	if s == """" {
+		return Config{}, errors.New(""empty input"")
+	}
+	return Config{Raw: s}, nil
+}","func Parse(s string) Config {
+	if s == """" {
+		panic(""empty input"")
+	}
+	return Config{Raw: s}
+}",https://go.dev/doc/effective_go#panic
+12,Use Defer for Cleanup,Convention,"defer, cleanup, close, unlock","Use defer to ensure resources are released after acquisition. Place defer immediately after successfully acquiring a resource like a file handle, lock, or connection.",Defer cleanup immediately after acquiring a resource,Manually close resources at multiple exit points,"func readFile(name string) ([]byte, error) {
+	f, err := os.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(f)
+}","func readFile(name string) ([]byte, error) {
+	f, err := os.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	data, err := io.ReadAll(f)
+	f.Close()
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}",https://go.dev/doc/effective_go#defer
+13,Prefer Synchronous APIs,Design,"sync, async, goroutine, API design","Let callers manage concurrency. Provide synchronous functions and let users decide whether to call them in goroutines. This gives callers full control.",Export synchronous functions and let the caller decide concurrency,Start goroutines inside library functions,"func Fetch(url string) ([]byte, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(resp.Body)
+}","func Fetch(url string, ch chan<- []byte) {
+	go func() {
+		resp, _ := http.Get(url)
+		defer resp.Body.Close()
+		data, _ := io.ReadAll(resp.Body)
+		ch <- data
+	}()
+}",https://go.dev/wiki/CodeReviewComments#synchronous-functions
+14,Return Early (Guard Clauses),Style,"guard clause, early return, nesting, readability","Handle error cases first and return early to reduce nesting. This flattens the happy path and makes code easier to read and maintain.",Use guard clauses to handle errors and edge cases early,Nest the happy path inside multiple if-else blocks,"func process(data []byte) error {
+	if len(data) == 0 {
+		return errors.New(""empty data"")
+	}
+	if data[0] != '{' {
+		return errors.New(""invalid format"")
+	}
+	// process data
+	return nil
+}","func process(data []byte) error {
+	if len(data) > 0 {
+		if data[0] == '{' {
+			// process data
+			return nil
+		} else {
+			return errors.New(""invalid format"")
+		}
+	} else {
+		return errors.New(""empty data"")
+	}
+}",https://go.dev/doc/effective_go#if
+15,Use init() Sparingly,Convention,"init, initialization, startup, side effects","init() runs automatically and makes code harder to test and reason about. Prefer explicit initialization in main() or constructors. Use init() only for simple registrations.",Use init() only for simple package-level registrations,"Use init() for complex logic, I/O, or error-prone operations","func init() {
+	flag.StringVar(&configPath, ""config"", ""config.json"", ""path to config"")
+}","func init() {
+	data, err := os.ReadFile(""config.json"")
+	if err != nil {
+		log.Fatal(err)
+	}
+	json.Unmarshal(data, &globalConfig)
+	db, _ = sql.Open(""postgres"", globalConfig.DSN)
+}",https://go.dev/doc/effective_go#init
+16,iota for Enums,Syntax,"iota, enum, const, enumeration","Use iota in const blocks to create incrementing integer constants. This is Go's idiomatic way to define enumerations without repeating values.",Use iota for sequential constant values,Manually assign incrementing integer values,"type Weekday int
+
+const (
+	Sunday Weekday = iota
+	Monday
+	Tuesday
+	Wednesday
+	Thursday
+	Friday
+	Saturday
+)","type Weekday int
+
+const (
+	Sunday    Weekday = 0
+	Monday    Weekday = 1
+	Tuesday   Weekday = 2
+	Wednesday Weekday = 3
+	Thursday  Weekday = 4
+	Friday    Weekday = 5
+	Saturday  Weekday = 6
+)",https://go.dev/doc/effective_go#constants
+17,Blank Identifier for Unused,Syntax,"blank identifier, underscore, unused, import","Use the blank identifier _ to discard unwanted values from multi-return functions or to verify interface compliance at compile time.",Use _ intentionally for values you explicitly do not need,Use _ to silence errors you should be handling,"var _ io.Reader = (*MyReader)(nil)
+
+for _, v := range items {
+	process(v)
+}","for i, v := range items {
+	_ = i
+	process(v)
+}",https://go.dev/doc/effective_go#blank
+18,Type Assertion Comma-Ok,Syntax,"type assertion, comma ok, interface, cast","Always use the two-value form of type assertions to avoid panics. The comma-ok pattern safely checks whether the assertion succeeded.",Use the comma-ok form of type assertions,Use single-value type assertions that can panic,"v, ok := i.(string)
+if !ok {
+	log.Println(""not a string"")
+	return
+}
+fmt.Println(v)","v := i.(string)
+fmt.Println(v)",https://go.dev/doc/effective_go#interface_conversions
+19,Multiple Return Values,Convention,"multiple return, error, tuple","Go functions can return multiple values. The convention is to return the result and an error as the last value. This makes error handling explicit and consistent.",Return result and error as the last value,Use pointer parameters for output values,"func divide(a, b float64) (float64, error) {
+	if b == 0 {
+		return 0, errors.New(""division by zero"")
+	}
+	return a / b, nil
+}","func divide(a, b float64, result *float64) error {
+	if b == 0 {
+		return errors.New(""division by zero"")
+	}
+	*result = a / b
+	return nil
+}",https://go.dev/doc/effective_go#multiple-returns
+20,Named Return Values,Convention,"named return, documentation, godoc","Named return values serve as documentation for the return types. Use them to clarify what each return value represents but avoid naked returns in long functions.",Use named returns for documentation in short functions,Use naked returns in functions longer than a few lines,"func parseSize(s string) (size int64, err error) {
+	size, err = strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf(""parse size %q: %w"", s, err)
+	}
+	return size, nil
+}","func parseSize(s string) (size int64, err error) {
+	size, err = strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		err = fmt.Errorf(""parse size: %w"", err)
+		return
+	}
+	return
+}",https://go.dev/wiki/CodeReviewComments#named-result-parameters
+21,Minimize Package-Level Variables,Design,"global, package, variable, state","Package-level variables create hidden dependencies and make testing harder. Prefer passing dependencies explicitly through function parameters or struct fields.",Pass dependencies explicitly through parameters or struct fields,Rely on package-level variables for shared state,"type Server struct {
+	db     *sql.DB
+	logger *log.Logger
+}
+
+func NewServer(db *sql.DB, logger *log.Logger) *Server {
+	return &Server{db: db, logger: logger}
+}","var db *sql.DB
+var logger *log.Logger
+
+func init() {
+	db, _ = sql.Open(""postgres"", os.Getenv(""DSN""))
+	logger = log.New(os.Stdout, """", log.LstdFlags)
+}",https://go.dev/wiki/CodeReviewComments#package-level-state
+22,Don't Export by Default,Naming,"export, visibility, API, unexported","Start with unexported identifiers and only export when there is a demonstrated need. This keeps the public API surface small and easy to maintain.",Keep identifiers unexported until you need them in another package,Export everything just in case it might be needed later,"type server struct {
+	addr   string
+	router *http.ServeMux
+}
+
+func newServer(addr string) *server {
+	return &server{addr: addr, router: http.NewServeMux()}
+}","type Server struct {
+	Addr   string
+	Router *http.ServeMux
+	InternalState int
+	DebugMode bool
+}",https://go.dev/doc/effective_go#names
+23,Use context.Context,Convention,"context, cancellation, timeout, deadline","Pass context.Context as the first parameter to functions that perform I/O or long-running operations. This enables cancellation, timeouts, and request-scoped values.",Pass context.Context as the first parameter named ctx,"Store context in structs or ignore cancellation signals","func FetchData(ctx context.Context, url string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(resp.Body)
+}","type Service struct {
+	ctx context.Context
+}
+
+func (s *Service) FetchData(url string) ([]byte, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(resp.Body)
+}",https://go.dev/blog/context
+24,Struct Field Ordering for Alignment,Performance,"alignment, padding, struct, memory","Order struct fields from largest to smallest to minimize memory padding inserted by the compiler. This can significantly reduce struct size in memory-sensitive code.",Order struct fields from largest to smallest alignment,Order fields randomly or alphabetically without considering alignment,"type Optimized struct {
+	A int64
+	B int64
+	C int32
+	D int16
+	E int8
+	F bool
+}
+// size: 24 bytes","type Unoptimized struct {
+	E int8
+	A int64
+	F bool
+	B int64
+	D int16
+	C int32
+}
+// size: 40 bytes",https://go.dev/ref/spec#Size_and_alignment_guarantees
+25,Embed Mutex in Struct,Convention,"mutex, embed, sync, concurrency","Embed sync.Mutex directly in a struct that needs synchronization. Place it as the first field and use it with Lock/Unlock to protect the struct's fields.",Embed sync.Mutex as an unexported field in the struct,"Pass *sync.Mutex as a separate parameter or use a global mutex","type SafeMap struct {
+	mu sync.Mutex
+	m  map[string]int
+}
+
+func (s *SafeMap) Set(k string, v int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.m == nil {
+		s.m = make(map[string]int)
+	}
+	s.m[k] = v
+}","var mu sync.Mutex
+var m = make(map[string]int)
+
+func Set(k string, v int) {
+	mu.Lock()
+	defer mu.Unlock()
+	m[k] = v
+}",https://go.dev/doc/effective_go#concurrency
+26,Map Ok Pattern,Syntax,"map, comma ok, lookup, existence","When looking up a key in a map, use the two-value form to distinguish between a missing key and a zero value. This avoids subtle bugs with zero-valued entries.",Use the comma-ok pattern for map lookups,Rely on the zero value to detect missing keys,"counts := map[string]int{""a"": 0, ""b"": 1}
+
+v, ok := counts[""a""]
+if !ok {
+	fmt.Println(""key not found"")
+} else {
+	fmt.Println(""value:"", v)
+}","counts := map[string]int{""a"": 0, ""b"": 1}
+
+v := counts[""a""]
+if v == 0 {
+	fmt.Println(""key not found"")
+}",https://go.dev/doc/effective_go#maps
+27,Slice Tricks,Syntax,"slice, append, copy, tricks","Go slices support idiomatic operations like filtering in place, inserting, and deleting without allocating new slices. Learn the common slice manipulation patterns.",Use idiomatic slice operations with append and copy,"Implement linked lists or use manual index management","// Delete element at index i
+a = append(a[:i], a[i+1:]...)
+
+// Insert element v at index i
+a = append(a[:i], append([]int{v}, a[i:]...)...)
+
+// Filter in place
+n := 0
+for _, x := range a {
+	if keep(x) {
+		a[n] = x
+		n++
+	}
+}
+a = a[:n]","// Delete by rebuilding
+var result []int
+for j, x := range a {
+	if j != i {
+		result = append(result, x)
+	}
+}
+a = result",https://go.dev/wiki/SliceTricks
+28,strings.Builder for Concatenation,Performance,"strings, builder, concatenation, performance","Use strings.Builder for concatenating strings in a loop. Each += on a string allocates a new string, while Builder minimizes allocations.",Use strings.Builder or bytes.Buffer for building strings,Use += string concatenation in loops,"var b strings.Builder
+for i := 0; i < 1000; i++ {
+	fmt.Fprintf(&b, ""item %d\n"", i)
+}
+result := b.String()","var result string
+for i := 0; i < 1000; i++ {
+	result += fmt.Sprintf(""item %d\n"", i)
+}",https://pkg.go.dev/strings#Builder
+29,Use time.Duration not int,Convention,"time, duration, type safety, units","Use time.Duration for time intervals instead of raw integers. This provides type safety and self-documenting code. Never store durations as plain int seconds or milliseconds.",Use time.Duration values with typed constants,Use raw integers to represent time durations,"func poll(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for range ticker.C {
+		check()
+	}
+}
+
+poll(5 * time.Second)","func poll(intervalMS int) {
+	ticker := time.NewTicker(
+		time.Duration(intervalMS) * time.Millisecond,
+	)
+	defer ticker.Stop()
+	for range ticker.C {
+		check()
+	}
+}
+
+poll(5000)",https://pkg.go.dev/time#Duration
+30,Constants with Types,Convention,"const, type, safety, enum","Define typed constants instead of untyped ones when the constant represents a specific domain concept. This provides compile-time type safety and prevents mixing unrelated values.",Use typed constants for domain-specific values,Use untyped constants or raw strings for fixed sets of values,"type Role string
+
+const (
+	RoleAdmin  Role = ""admin""
+	RoleEditor Role = ""editor""
+	RoleViewer Role = ""viewer""
+)
+
+func Authorize(r Role) bool {
+	return r == RoleAdmin
+}","const (
+	RoleAdmin  = ""admin""
+	RoleEditor = ""editor""
+	RoleViewer = ""viewer""
+)
+
+func Authorize(r string) bool {
+	return r == RoleAdmin
+}",https://go.dev/ref/spec#Constant_declarations

@@ -1,0 +1,428 @@
+No,Category,Guideline,Description,Do,Dont,Code Good,Code Bad,Severity,Docs URL
+1,Router Setup,Use gin.New() with explicit middleware in production,"gin.Default() includes Logger and Recovery middleware which may not suit production needs. Use gin.New() and add only the middleware you need for better control.",Use gin.New() and attach middleware explicitly,Use gin.Default() blindly in production,"r := gin.New()
+r.Use(gin.Logger())
+r.Use(gin.Recovery())","r := gin.Default() // includes Logger + Recovery you may not want",High,https://pkg.go.dev/github.com/gin-gonic/gin#New
+2,Route Groups,"Use r.Group() for API versioning and logical grouping","Group related routes under a common prefix to keep your router organized and enable per-group middleware such as auth or rate limiting.",Group routes by version or feature domain,Define all routes flat on the root router,"v1 := r.Group(""/api/v1"")
+{
+    v1.GET(""/users"", listUsers)
+    v1.POST(""/users"", createUser)
+}","r.GET(""/api/v1/users"", listUsers)
+r.POST(""/api/v1/users"", createUser)
+r.GET(""/api/v2/users"", listUsersV2)",Medium,https://pkg.go.dev/github.com/gin-gonic/gin#RouterGroup.Group
+3,Custom Middleware Pattern,Write middleware as functions returning gin.HandlerFunc,"Middleware should return gin.HandlerFunc so it can accept configuration parameters. Call c.Next() to continue the chain or c.Abort() to stop it.",Return gin.HandlerFunc from a factory function,Put middleware logic directly inline in route registration,"func RateLimit(rps int) gin.HandlerFunc {
+    limiter := rate.NewLimiter(rate.Limit(rps), rps)
+    return func(c *gin.Context) {
+        if !limiter.Allow() {
+            c.AbortWithStatusJSON(429, gin.H{""error"": ""too many requests""})
+            return
+        }
+        c.Next()
+    }
+}","r.GET(""/api/data"", func(c *gin.Context) {
+    // rate limit logic mixed with handler logic
+    // hard to reuse
+    c.JSON(200, data)
+})",High,https://gin-gonic.com/docs/examples/custom-middleware/
+4,Auth Middleware,Validate JWT tokens in dedicated middleware,"Extract and validate the JWT from the Authorization header in middleware. Set the parsed claims into the context so downstream handlers can access the authenticated user.",Parse token in middleware and set claims via c.Set(),Validate tokens inside each individual handler,"func AuthMiddleware(secret string) gin.HandlerFunc {
+    return func(c *gin.Context) {
+        tokenStr := c.GetHeader(""Authorization"")
+        tokenStr = strings.TrimPrefix(tokenStr, ""Bearer "")
+        token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
+            return []byte(secret), nil
+        })
+        if err != nil || !token.Valid {
+            c.AbortWithStatusJSON(401, gin.H{""error"": ""unauthorized""})
+            return
+        }
+        c.Set(""claims"", token.Claims)
+        c.Next()
+    }
+}","func GetProfile(c *gin.Context) {
+    tokenStr := c.GetHeader(""Authorization"")
+    // duplicated JWT parsing in every handler
+    token, _ := jwt.Parse(tokenStr, keyFunc)
+    claims := token.Claims
+    c.JSON(200, claims)
+}",Critical,https://gin-gonic.com/docs/examples/custom-middleware/
+5,Logging Middleware,Use structured logging middleware for request tracing,"Log request method, path, status code, latency, and client IP in a structured format. Use a logger like zerolog or zap instead of the default gin.Logger for production.",Use structured logging with latency and status tracking,Rely solely on gin.Logger() with its default text format,"func StructuredLogger(logger *zap.Logger) gin.HandlerFunc {
+    return func(c *gin.Context) {
+        start := time.Now()
+        c.Next()
+        logger.Info(""request"",
+            zap.String(""method"", c.Request.Method),
+            zap.String(""path"", c.Request.URL.Path),
+            zap.Int(""status"", c.Writer.Status()),
+            zap.Duration(""latency"", time.Since(start)),
+        )
+    }
+}","r := gin.Default() // uses default text logger
+// no structured fields, hard to parse in log aggregators",Medium,https://gin-gonic.com/docs/examples/custom-log-format/
+6,CORS Middleware,Configure CORS with explicit allowed origins,"Use the gin-contrib/cors package with specific origins, methods, and headers. Never use AllowAllOrigins in production as it exposes your API to any domain.",Specify exact allowed origins and methods,"Use AllowAllOrigins: true or set Access-Control-Allow-Origin to * manually","import ""github.com/gin-contrib/cors""
+
+r.Use(cors.New(cors.Config{
+    AllowOrigins:     []string{""https://example.com""},
+    AllowMethods:     []string{""GET"", ""POST"", ""PUT"", ""DELETE""},
+    AllowHeaders:     []string{""Origin"", ""Authorization"", ""Content-Type""},
+    ExposeHeaders:    []string{""Content-Length""},
+    AllowCredentials: true,
+    MaxAge:           12 * time.Hour,
+}))","r.Use(func(c *gin.Context) {
+    c.Header(""Access-Control-Allow-Origin"", ""*"")
+    c.Header(""Access-Control-Allow-Methods"", ""*"")
+    c.Next()
+})",Critical,https://pkg.go.dev/github.com/gin-contrib/cors
+7,Recovery Middleware,Use custom recovery middleware with error reporting,"The default gin.Recovery() writes to stderr. In production wrap it with custom logic to send panics to an error tracking service like Sentry.",Use gin.CustomRecovery to report panics to monitoring,Let panics crash silently or only go to stderr,"r.Use(gin.CustomRecovery(func(c *gin.Context, recovered interface{}) {
+    sentry.CaptureException(fmt.Errorf(""panic: %v"", recovered))
+    c.AbortWithStatusJSON(500, gin.H{""error"": ""internal server error""})
+}))","r.Use(gin.Recovery())
+// panics only go to stderr, no alerting",High,https://pkg.go.dev/github.com/gin-gonic/gin#CustomRecovery
+8,Request Binding,Use ShouldBindJSON instead of BindJSON,"ShouldBindJSON returns an error without automatically writing a 400 response, giving you control over the error format. BindJSON calls c.AbortWithError internally.",Use ShouldBindJSON and handle the error yourself,Use BindJSON which auto-aborts with a default 400 response,"var req CreateUserRequest
+if err := c.ShouldBindJSON(&req); err != nil {
+    c.JSON(400, gin.H{""error"": err.Error()})
+    return
+}","var req CreateUserRequest
+if err := c.BindJSON(&req); err != nil {
+    // already wrote 400 with default format
+    // you lost control of the response
+    return
+}",High,https://pkg.go.dev/github.com/gin-gonic/gin#Context.ShouldBindJSON
+9,Struct Validation,Use binding tags for declarative input validation,"Gin uses go-playground/validator under the hood. Add binding tags to struct fields for required fields, string length, email format, and more.",Declare validation rules in struct tags,Write manual validation logic in every handler,"type CreateUserRequest struct {
+    Name  string `json:""name"" binding:""required,min=2,max=100""`
+    Email string `json:""email"" binding:""required,email""`
+    Age   int    `json:""age"" binding:""required,gte=18,lte=120""`
+}","type CreateUserRequest struct {
+    Name  string `json:""name""`
+    Email string `json:""email""`
+    Age   int    `json:""age""`
+}
+// then manually: if req.Name == """" { ... }
+// if !strings.Contains(req.Email, ""@"") { ... }",Medium,https://gin-gonic.com/docs/examples/binding-and-validation/
+10,Custom Validators,Register custom validators with the binding engine,"For business rules not covered by built-in validators, register custom validation functions using the validator engine obtained from binding.Validator.",Register custom validators at startup with the validator engine,Duplicate custom validation logic across handlers,"import ""github.com/go-playground/validator/v10""
+
+func init() {
+    if v, ok := binding.Validator.Engine().(*validator.Validate); ok {
+        v.RegisterValidation(""notblank"", func(fl validator.FieldLevel) bool {
+            return strings.TrimSpace(fl.Field().String()) != """"
+        })
+    }
+}
+
+type Input struct {
+    Title string `json:""title"" binding:""required,notblank""`
+}","func CreatePost(c *gin.Context) {
+    var input Input
+    c.ShouldBindJSON(&input)
+    if strings.TrimSpace(input.Title) == """" {
+        c.JSON(400, gin.H{""error"": ""title cannot be blank""})
+        return
+    }
+    // repeated in every handler that needs this check
+}",Medium,https://gin-gonic.com/docs/examples/custom-validators/
+11,Error Handling,Return consistent error responses with gin.H,"Always return errors as JSON with a consistent structure including an error message and optional details. Use appropriate HTTP status codes.",Return structured JSON errors with proper status codes,Return plain text errors or inconsistent error shapes,"func GetUser(c *gin.Context) {
+    user, err := userService.FindByID(c.Param(""id""))
+    if errors.Is(err, ErrNotFound) {
+        c.JSON(404, gin.H{""error"": ""user not found""})
+        return
+    }
+    if err != nil {
+        c.JSON(500, gin.H{""error"": ""internal server error""})
+        return
+    }
+    c.JSON(200, gin.H{""data"": user})
+}","func GetUser(c *gin.Context) {
+    user, err := userService.FindByID(c.Param(""id""))
+    if err != nil {
+        c.String(500, err.Error()) // leaks internal error, plain text
+        return
+    }
+    c.JSON(200, user)
+}",High,https://gin-gonic.com/docs/examples/pure-json/
+12,Consistent Response Format,Wrap all responses in a standard JSON envelope,"Define a response struct with success, data, and error fields. This makes it easier for frontend clients to parse responses uniformly.",Use a response helper that wraps data in a consistent envelope,Return raw data or different shapes from different endpoints,"type Response struct {
+    Success bool        `json:""success""`
+    Data    interface{} `json:""data,omitempty""`
+    Error   string      `json:""error,omitempty""`
+}
+
+func OK(c *gin.Context, data interface{}) {
+    c.JSON(200, Response{Success: true, Data: data})
+}
+
+func Fail(c *gin.Context, code int, msg string) {
+    c.JSON(code, Response{Success: false, Error: msg})
+}","// handler A returns: {""users"": [...]}
+// handler B returns: {""error"": ""not found""}
+// handler C returns: [{...}, {...}]
+// inconsistent shapes break client parsing",Medium,https://gin-gonic.com/docs/examples/pure-json/
+13,File Upload,Use c.FormFile for single uploads and c.MultipartForm for multiple,"Limit file size with r.MaxMultipartMemory. Validate the file type and size before saving. Use c.SaveUploadedFile for convenience.",Validate file type and size before saving; set MaxMultipartMemory,Accept any file without validation or size limits,"r.MaxMultipartMemory = 8 << 20 // 8 MiB
+
+func Upload(c *gin.Context) {
+    file, err := c.FormFile(""file"")
+    if err != nil {
+        c.JSON(400, gin.H{""error"": ""file required""})
+        return
+    }
+    if file.Size > 5<<20 {
+        c.JSON(400, gin.H{""error"": ""file too large""})
+        return
+    }
+    dst := filepath.Join(""uploads"", file.Filename)
+    c.SaveUploadedFile(file, dst)
+    c.JSON(200, gin.H{""filename"": file.Filename})
+}","func Upload(c *gin.Context) {
+    file, _ := c.FormFile(""file"")
+    c.SaveUploadedFile(file, file.Filename) // no validation, unsafe path
+    c.String(200, ""ok"")
+}",High,https://gin-gonic.com/docs/examples/upload-file/single-file/
+14,Static Files,Use r.Static and r.StaticFS for serving static assets,"Serve static files from a dedicated directory. Use r.StaticFile for individual files and r.Static for directories. Never serve the entire project root.",Serve a specific directory with r.Static(),Serve the project root or use a broad path,"r.Static(""/assets"", ""./public/assets"")
+r.StaticFile(""/favicon.ico"", ""./public/favicon.ico"")","r.Static(""/"", ""."") // exposes entire project directory including .env, go.mod, etc.",Critical,https://gin-gonic.com/docs/examples/serving-static-files/
+15,HTML Templates,Use r.LoadHTMLGlob or LoadHTMLFiles for template rendering,"Load templates at startup and render them with c.HTML. Pass data using gin.H. Use template functions for formatting within templates.",Load templates once at startup with LoadHTMLGlob,Parse templates on every request,"r.LoadHTMLGlob(""templates/*"")
+
+func Index(c *gin.Context) {
+    c.HTML(200, ""index.tmpl"", gin.H{
+        ""title"": ""Home"",
+        ""items"": items,
+    })
+}","func Index(c *gin.Context) {
+    t, _ := template.ParseFiles(""templates/index.tmpl"") // parsed every request
+    t.Execute(c.Writer, data)
+}",Medium,https://gin-gonic.com/docs/examples/html-rendering/
+16,Route Parameters,Use c.Param for path params and c.Query for query params,"Distinguish between path parameters (/users/:id) and query parameters (/users?page=1). Always validate and convert parameter types before use.",Validate and convert params with proper error handling,Use raw string params without validation or conversion,"func GetUser(c *gin.Context) {
+    id, err := strconv.Atoi(c.Param(""id""))
+    if err != nil {
+        c.JSON(400, gin.H{""error"": ""invalid user id""})
+        return
+    }
+    user, err := repo.FindByID(id)
+    if err != nil {
+        c.JSON(404, gin.H{""error"": ""user not found""})
+        return
+    }
+    c.JSON(200, gin.H{""data"": user})
+}","func GetUser(c *gin.Context) {
+    id := c.Param(""id"") // raw string, never validated
+    user, _ := repo.FindByID(id) // ignores error
+    c.JSON(200, user)
+}",High,https://gin-gonic.com/docs/examples/param-in-path/
+17,Trusted Proxies,Set trusted proxies explicitly with SetTrustedProxies,"When behind a reverse proxy, configure trusted proxies so that c.ClientIP() returns the correct client IP from X-Forwarded-For. Pass nil to trust no proxies.",Call SetTrustedProxies with your actual proxy IPs or nil,Leave the default which trusts all proxies,"r := gin.Default()
+r.SetTrustedProxies([]string{""10.0.0.0/8""})
+// or trust no proxies:
+// r.SetTrustedProxies(nil)","r := gin.Default()
+// default trusts all proxies
+// c.ClientIP() can be spoofed via X-Forwarded-For",Critical,https://pkg.go.dev/github.com/gin-gonic/gin#Engine.SetTrustedProxies
+18,Graceful Shutdown,Use http.Server with signal handling for graceful shutdown,"Do not use r.Run(). Create an http.Server and use Shutdown() with a context to drain in-flight requests before stopping. Listen for OS signals to trigger shutdown.",Use http.Server and os.Signal for graceful shutdown,Use r.Run() which does not support graceful shutdown,"srv := &http.Server{
+    Addr:    "":8080"",
+    Handler: r,
+}
+
+go func() {
+    if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+        log.Fatal(err)
+    }
+}()
+
+quit := make(chan os.Signal, 1)
+signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+<-quit
+
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+srv.Shutdown(ctx)","r := gin.Default()
+r.GET(""/"", handler)
+r.Run("":8080"") // no graceful shutdown, connections dropped on SIGTERM",High,https://gin-gonic.com/docs/examples/graceful-restart-or-stop/
+19,Rate Limiting,Implement rate limiting as middleware using a token bucket,"Use golang.org/x/time/rate or a distributed limiter backed by Redis. Apply rate limiting per client IP or per API key to prevent abuse.",Use a per-IP or per-key rate limiter middleware,Apply a single global limiter or skip rate limiting entirely,"func PerIPRateLimiter() gin.HandlerFunc {
+    clients := sync.Map{}
+    return func(c *gin.Context) {
+        ip := c.ClientIP()
+        val, _ := clients.LoadOrStore(ip, rate.NewLimiter(10, 20))
+        limiter := val.(*rate.Limiter)
+        if !limiter.Allow() {
+            c.AbortWithStatusJSON(429, gin.H{""error"": ""rate limit exceeded""})
+            return
+        }
+        c.Next()
+    }
+}","// no rate limiting at all
+r.GET(""/api/data"", getData)
+// or a single global limiter shared by all clients
+var globalLimiter = rate.NewLimiter(100, 100)",High,https://gin-gonic.com/docs/examples/custom-middleware/
+20,Request Timeout,Use context timeout middleware to prevent long-running requests,"Wrap each request context with a deadline so that slow database queries or external calls are cancelled after the timeout period.",Set a per-request timeout using context.WithTimeout,Let requests run indefinitely with no timeout,"func TimeoutMiddleware(timeout time.Duration) gin.HandlerFunc {
+    return func(c *gin.Context) {
+        ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
+        defer cancel()
+        c.Request = c.Request.WithContext(ctx)
+        c.Next()
+    }
+}
+
+r.Use(TimeoutMiddleware(10 * time.Second))","r.GET(""/slow"", func(c *gin.Context) {
+    result := verySlowQuery() // no timeout, can hang forever
+    c.JSON(200, result)
+})",High,https://pkg.go.dev/github.com/gin-gonic/gin#Context
+21,Pagination,Parse page and limit from query params with sensible defaults,"Always validate and cap pagination parameters. Set reasonable defaults and maximum limits to prevent clients from requesting too much data.",Validate and cap pagination params with defaults and max limits,Trust client-supplied pagination values without bounds,"func Paginate(c *gin.Context) (int, int) {
+    page, _ := strconv.Atoi(c.DefaultQuery(""page"", ""1""))
+    limit, _ := strconv.Atoi(c.DefaultQuery(""limit"", ""20""))
+    if page < 1 { page = 1 }
+    if limit < 1 { limit = 20 }
+    if limit > 100 { limit = 100 }
+    offset := (page - 1) * limit
+    return offset, limit
+}","func ListUsers(c *gin.Context) {
+    limit, _ := strconv.Atoi(c.Query(""limit"")) // could be 0 or 999999
+    db.Find(&users).Limit(limit) // no cap, potential DoS
+    c.JSON(200, users)
+}",Medium,https://gin-gonic.com/docs/examples/query-and-post-form/
+22,Authentication,Prefer stateless token-based auth over server-side sessions,"For APIs use JWT or opaque tokens stored in the Authorization header. Sessions require server-side state and sticky sessions which complicate horizontal scaling.",Use token-based auth for APIs with the Authorization header,Store auth state in cookies with server-side sessions for APIs,"auth := r.Group(""/api"")
+auth.Use(AuthMiddleware(jwtSecret))
+{
+    auth.GET(""/profile"", getProfile)
+    auth.PUT(""/profile"", updateProfile)
+}
+
+func getProfile(c *gin.Context) {
+    claims, _ := c.Get(""claims"")
+    c.JSON(200, gin.H{""user"": claims})
+}","r.Use(sessions.Sessions(""session"", store))
+
+func getProfile(c *gin.Context) {
+    session := sessions.Default(c)
+    userID := session.Get(""userID"") // requires sticky sessions
+    c.JSON(200, gin.H{""userID"": userID})
+}",Medium,https://gin-gonic.com/docs/examples/custom-middleware/
+23,Database Integration,Use the repository pattern to decouple database access from handlers,"Inject a repository interface into handlers or use gin context to pass the database connection. This makes handlers testable and database-agnostic.",Inject repository interfaces and access them via context or struct,Use a global DB variable directly in handlers,"type UserRepo interface {
+    FindByID(ctx context.Context, id int) (*User, error)
+}
+
+type UserHandler struct {
+    repo UserRepo
+}
+
+func (h *UserHandler) GetUser(c *gin.Context) {
+    id, _ := strconv.Atoi(c.Param(""id""))
+    user, err := h.repo.FindByID(c.Request.Context(), id)
+    if err != nil {
+        c.JSON(404, gin.H{""error"": ""not found""})
+        return
+    }
+    c.JSON(200, gin.H{""data"": user})
+}","var db *gorm.DB // global mutable state
+
+func GetUser(c *gin.Context) {
+    var user User
+    db.First(&user, c.Param(""id"")) // untestable, tightly coupled
+    c.JSON(200, user)
+}",High,https://gin-gonic.com/docs/examples/binding-and-validation/
+24,Testing,Use httptest.NewRecorder with the gin router for handler tests,"Create the gin router in test mode, register routes, and use httptest to send requests and assert responses. Set gin.SetMode(gin.TestMode) to suppress debug output.",Use httptest.NewRecorder and gin.SetMode(gin.TestMode),Test by starting a real HTTP server or skip testing handlers,"func TestGetUser(t *testing.T) {
+    gin.SetMode(gin.TestMode)
+    r := gin.New()
+    r.GET(""/users/:id"", handler.GetUser)
+
+    w := httptest.NewRecorder()
+    req, _ := http.NewRequest(""GET"", ""/users/1"", nil)
+    r.ServeHTTP(w, req)
+
+    assert.Equal(t, 200, w.Code)
+    var resp map[string]interface{}
+    json.Unmarshal(w.Body.Bytes(), &resp)
+    assert.NotNil(t, resp[""data""])
+}","func TestGetUser(t *testing.T) {
+    go r.Run("":9999"") // starts a real server in tests
+    time.Sleep(time.Second)
+    resp, _ := http.Get(""http://localhost:9999/users/1"")
+    // flaky, port conflicts, slow
+}",High,https://gin-gonic.com/docs/testing/
+25,Swagger Integration,Use swaggo/gin-swagger for auto-generated API docs,"Annotate handlers with swaggo comments and use gin-swagger middleware to serve the Swagger UI. Run swag init to generate the docs from annotations.",Use swaggo annotations and generate docs at build time,Write OpenAPI specs manually and keep them separate from code,"import (
+    ginSwagger ""github.com/swaggo/gin-swagger""
+    swaggerFiles ""github.com/swaggo/files""
+    _ ""myapp/docs""
+)
+
+// @Summary Get a user
+// @Tags users
+// @Param id path int true ""User ID""
+// @Success 200 {object} User
+// @Router /users/{id} [get]
+func GetUser(c *gin.Context) { /* ... */ }
+
+r.GET(""/swagger/*any"", ginSwagger.WrapHandler(swaggerFiles.Handler))","// manually written swagger.json that drifts from actual code
+// no annotations, docs become outdated quickly
+r.StaticFile(""/swagger.json"", ""./docs/swagger.json"")",Low,https://pkg.go.dev/github.com/swaggo/gin-swagger
+26,WebSocket,Upgrade HTTP to WebSocket using gorilla/websocket with gin,"Use the gorilla/websocket Upgrader in a gin handler to upgrade the connection. Handle read/write in a goroutine loop and check the origin in the Upgrader.",Use gorilla/websocket Upgrader with origin checking,Implement WebSocket from scratch or skip origin validation,"var upgrader = websocket.Upgrader{
+    CheckOrigin: func(r *http.Request) bool {
+        origin := r.Header.Get(""Origin"")
+        return origin == ""https://example.com""
+    },
+}
+
+func WsHandler(c *gin.Context) {
+    conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+    if err != nil {
+        return
+    }
+    defer conn.Close()
+    for {
+        _, msg, err := conn.ReadMessage()
+        if err != nil { break }
+        conn.WriteMessage(websocket.TextMessage, msg)
+    }
+}","var upgrader = websocket.Upgrader{
+    CheckOrigin: func(r *http.Request) bool {
+        return true // accepts any origin
+    },
+}",Medium,https://pkg.go.dev/github.com/gorilla/websocket
+27,Streaming Response,Use c.Stream or c.SSEvent for server-sent events,"Gin supports streaming via c.Stream and SSE via c.SSEvent. Set proper headers for SSE and flush after each event. Use the client-gone channel to stop streaming.",Use c.Stream with proper SSE headers and flush,Buffer the entire response before sending or ignore client disconnect,"func StreamEvents(c *gin.Context) {
+    c.Header(""Content-Type"", ""text/event-stream"")
+    c.Header(""Cache-Control"", ""no-cache"")
+    c.Header(""Connection"", ""keep-alive"")
+    c.Stream(func(w io.Writer) bool {
+        select {
+        case msg := <-eventChan:
+            c.SSEvent(""message"", msg)
+            return true
+        case <-c.Request.Context().Done():
+            return false
+        }
+    })
+}","func StreamEvents(c *gin.Context) {
+    var events []string
+    for e := range eventChan { // blocks forever if channel stays open
+        events = append(events, e)
+    }
+    c.JSON(200, events) // client waits for entire batch
+}",Medium,https://gin-gonic.com/docs/examples/pure-json/
+28,Custom HTTP Methods,Use r.Handle for non-standard HTTP methods,"Gin supports custom HTTP methods via r.Handle. Use this for WebDAV methods like PROPFIND or custom methods your API requires.",Use r.Handle() for non-standard methods,Ignore non-standard methods or hack around routing,"r.Handle(""PROPFIND"", ""/webdav/*path"", func(c *gin.Context) {
+    c.XML(207, multistatus)
+})
+
+r.Handle(""PATCH"", ""/users/:id"", patchUser)","// no way to handle PROPFIND
+// or use a catch-all that checks method manually
+r.Any(""/webdav/*path"", func(c *gin.Context) {
+    if c.Request.Method == ""PROPFIND"" { /* ... */ }
+})",Low,https://pkg.go.dev/github.com/gin-gonic/gin#Engine.Handle
+29,No Route Handler,Register a custom NoRoute handler for 404 responses,"Use r.NoRoute to return a proper JSON 404 response instead of the default HTML page. Also use r.NoMethod for 405 responses.",Set r.NoRoute and r.NoMethod with JSON responses,Let gin return the default HTML 404 page for an API,"r.NoRoute(func(c *gin.Context) {
+    c.JSON(404, gin.H{
+        ""error"":   ""not found"",
+        ""path"":    c.Request.URL.Path,
+        ""method"":  c.Request.Method,
+    })
+})
+
+r.NoMethod(func(c *gin.Context) {
+    c.JSON(405, gin.H{""error"": ""method not allowed""})
+})","// default gin behavior returns:
+// 404 page not found (plain text)
+// inconsistent with JSON API responses",Medium,https://pkg.go.dev/github.com/gin-gonic/gin#Engine.NoRoute
+30,Production Config,"Set gin.ReleaseMode, trusted proxies, and server timeouts for production","In production set GIN_MODE=release or call gin.SetMode. Configure read/write timeouts on http.Server and set trusted proxies. Disable debug logging.",Configure release mode and http.Server timeouts for production,Run gin.Default() with default settings in production,"gin.SetMode(gin.ReleaseMode)
+r := gin.New()
+r.Use(gin.Recovery())
+r.SetTrustedProxies([]string{""10.0.0.0/8""})
+
+srv := &http.Server{
+    Addr:         "":8080"",
+    Handler:      r,
+    ReadTimeout:  5 * time.Second,
+    WriteTimeout: 10 * time.Second,
+    IdleTimeout:  120 * time.Second,
+}
+srv.ListenAndServe()","r := gin.Default() // debug mode, logs all requests
+r.Run("":8080"") // no read/write timeouts, no trusted proxies
+// trusts all proxies, no graceful shutdown",Critical,https://gin-gonic.com/docs/examples/run-multiple-service/

@@ -1,0 +1,354 @@
+No,Category,Guideline,Description,Do,Dont,Code Good,Code Bad,Severity,Docs URL
+1,database/sql,Open and Ping,"Use sql.Open to create a connection pool and db.PingContext to verify connectivity before serving traffic.",Always call db.PingContext after sql.Open to verify the database is reachable.,Do not assume sql.Open validates the connection; it only initializes the pool.,"db, err := sql.Open(""postgres"", dsn)
+if err != nil {
+    log.Fatal(err)
+}
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+if err := db.PingContext(ctx); err != nil {
+    log.Fatal(err)
+}","db, _ := sql.Open(""postgres"", dsn)
+// No ping, assume connection works
+rows, err := db.Query(""SELECT 1"")",error,https://pkg.go.dev/database/sql#Open
+2,Connection Pooling,SetMaxOpenConns and SetMaxIdleConns,"Configure connection pool limits to prevent exhausting database connections and to reuse idle connections efficiently.",Set MaxOpenConns and MaxIdleConns based on your workload and database limits.,Do not leave defaults unbounded; unlimited open connections can overwhelm the database.,"db.SetMaxOpenConns(25)
+db.SetMaxIdleConns(10)
+db.SetConnMaxLifetime(5 * time.Minute)
+db.SetConnMaxIdleTime(1 * time.Minute)","db, _ := sql.Open(""postgres"", dsn)
+// No pool configuration at all
+// defaults allow unlimited connections",warning,https://pkg.go.dev/database/sql#DB.SetMaxOpenConns
+3,Context Queries,QueryContext and ExecContext,"Use context-aware query methods to support cancellation and timeout propagation from upstream callers.",Use QueryContext and ExecContext instead of Query and Exec.,Do not use non-context query methods; they cannot be cancelled or timed out.,"ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+defer cancel()
+rows, err := db.QueryContext(ctx, ""SELECT id, name FROM users WHERE active = $1"", true)
+if err != nil {
+    return fmt.Errorf(""query users: %w"", err)
+}
+defer rows.Close()","rows, err := db.Query(""SELECT id, name FROM users WHERE active = $1"", true)
+// No context, no timeout, no cancellation support",warning,https://pkg.go.dev/database/sql#DB.QueryContext
+4,sql.ErrNoRows,Proper Handling,"Use errors.Is(err, sql.ErrNoRows) to distinguish a missing row from real errors when using QueryRow.",Check for sql.ErrNoRows explicitly when a missing row is a valid business case.,Do not treat sql.ErrNoRows as a fatal error when absence is expected.,"var name string
+err := db.QueryRowContext(ctx, ""SELECT name FROM users WHERE id = $1"", id).Scan(&name)
+if errors.Is(err, sql.ErrNoRows) {
+    return """", ErrUserNotFound
+}
+if err != nil {
+    return """", fmt.Errorf(""get user: %w"", err)
+}
+return name, nil","var name string
+err := db.QueryRowContext(ctx, ""SELECT name FROM users WHERE id = $1"", id).Scan(&name)
+if err != nil {
+    log.Fatal(err) // crashes on missing row
+}",error,https://pkg.go.dev/database/sql#ErrNoRows
+5,Transactions,Begin Commit Rollback Pattern,"Wrap multi-statement operations in a transaction and always defer a rollback so it runs on error paths.",Defer tx.Rollback immediately after Begin; it is a no-op after Commit.,Do not forget to rollback on error; leaked transactions hold locks and connections.,"tx, err := db.BeginTx(ctx, nil)
+if err != nil {
+    return fmt.Errorf(""begin tx: %w"", err)
+}
+defer tx.Rollback()
+if _, err := tx.ExecContext(ctx, ""UPDATE accounts SET balance = balance - $1 WHERE id = $2"", amount, from); err != nil {
+    return fmt.Errorf(""debit: %w"", err)
+}
+if _, err := tx.ExecContext(ctx, ""UPDATE accounts SET balance = balance + $1 WHERE id = $2"", amount, to); err != nil {
+    return fmt.Errorf(""credit: %w"", err)
+}
+return tx.Commit()","tx, _ := db.BeginTx(ctx, nil)
+tx.ExecContext(ctx, ""UPDATE accounts SET balance = balance - $1 WHERE id = $2"", amount, from)
+tx.ExecContext(ctx, ""UPDATE accounts SET balance = balance + $1 WHERE id = $2"", amount, to)
+tx.Commit()
+// No rollback on error, no error handling",error,https://pkg.go.dev/database/sql#DB.BeginTx
+6,Prepared Statements,sql.Stmt Reuse,"Prepare statements once and reuse them to avoid repeated parse and plan overhead on the database server.",Prepare statements at initialization time and reuse the *sql.Stmt across calls.,Do not prepare statements inside hot loops; it causes repeated parsing on every call.,"stmt, err := db.PrepareContext(ctx, ""SELECT name FROM users WHERE id = $1"")
+if err != nil {
+    return fmt.Errorf(""prepare: %w"", err)
+}
+defer stmt.Close()
+for _, id := range ids {
+    var name string
+    if err := stmt.QueryRowContext(ctx, id).Scan(&name); err != nil {
+        return fmt.Errorf(""scan id %d: %w"", id, err)
+    }
+    names = append(names, name)
+}","for _, id := range ids {
+    stmt, _ := db.PrepareContext(ctx, ""SELECT name FROM users WHERE id = $1"")
+    var name string
+    stmt.QueryRowContext(ctx, id).Scan(&name)
+    names = append(names, name)
+    // stmt prepared and leaked every iteration
+}",warning,https://pkg.go.dev/database/sql#DB.PrepareContext
+7,Null Handling,sql.NullString and sql.NullInt64,"Use sql.Null types to safely scan nullable columns without panicking on NULL values.",Use sql.NullString or sql.NullInt64 for columns that can be NULL.,Do not scan nullable columns into plain Go types; NULL will cause a scan error.,"var user struct {
+    ID   int64
+    Name string
+    Bio  sql.NullString
+}
+err := db.QueryRowContext(ctx, ""SELECT id, name, bio FROM users WHERE id = $1"", id).Scan(&user.ID, &user.Name, &user.Bio)
+if err != nil {
+    return fmt.Errorf(""scan: %w"", err)
+}
+if user.Bio.Valid {
+    fmt.Println(user.Bio.String)
+}","var user struct {
+    ID   int64
+    Name string
+    Bio  string
+}
+// Panics or errors when bio is NULL
+db.QueryRowContext(ctx, ""SELECT id, name, bio FROM users WHERE id = $1"", id).Scan(&user.ID, &user.Name, &user.Bio)",warning,https://pkg.go.dev/database/sql#NullString
+8,GORM Models,Struct Tags and Conventions,"Define GORM models with proper struct tags and embed gorm.Model for ID and timestamp fields.",Embed gorm.Model and use struct tags for column constraints and indexes.,Do not manually define ID and timestamp fields when gorm.Model provides them.,"type User struct {
+    gorm.Model
+    Name  string `gorm:""type:varchar(100);not null""`
+    Email string `gorm:""type:varchar(255);uniqueIndex;not null""`
+    Age   int    `gorm:""default:0""`
+}","type User struct {
+    ID   int
+    Name string
+    // No timestamps, no soft delete, no tags
+}",warning,https://gorm.io/docs/models.html
+9,GORM Hooks,BeforeCreate and AfterCreate,"Use GORM hooks to inject logic before or after database operations without cluttering business code.",Use hooks for cross-cutting concerns like UUID generation or audit logging.,Do not put hook-like logic in every caller; centralize it in the model hook.,"func (u *User) BeforeCreate(tx *gorm.DB) error {
+    if u.ID == uuid.Nil {
+        u.ID = uuid.New()
+    }
+    return nil
+}
+func (u *User) AfterCreate(tx *gorm.DB) error {
+    log.Printf(""user created: %s"", u.ID)
+    return nil
+}","// Manually setting UUID before every create call
+u.ID = uuid.New()
+db.Create(&u)
+log.Printf(""user created: %s"", u.ID)
+// Repeated everywhere, easy to forget",info,https://gorm.io/docs/hooks.html
+10,GORM Scopes,Reusable Query Conditions,"Define scopes as functions that return func(*gorm.DB) *gorm.DB to compose reusable query conditions.",Define scopes for common filters and chain them with db.Scopes.,Do not duplicate WHERE clauses across multiple query sites.,"func Active(db *gorm.DB) *gorm.DB {
+    return db.Where(""active = ?"", true)
+}
+func OlderThan(age int) func(db *gorm.DB) *gorm.DB {
+    return func(db *gorm.DB) *gorm.DB {
+        return db.Where(""age > ?"", age)
+    }
+}
+var users []User
+db.Scopes(Active, OlderThan(18)).Find(&users)","var users []User
+db.Where(""active = ?"", true).Where(""age > ?"", 18).Find(&users)
+// Duplicated in every query that needs active + age filter",info,https://gorm.io/docs/scopes.html
+11,GORM Transactions,db.Transaction,"Use db.Transaction for automatic commit on nil error and rollback on non-nil error.",Use the db.Transaction callback which handles commit and rollback automatically.,Do not manually Begin/Commit/Rollback with GORM unless you need savepoints.,"err := db.Transaction(func(tx *gorm.DB) error {
+    if err := tx.Create(&order).Error; err != nil {
+        return err
+    }
+    if err := tx.Create(&payment).Error; err != nil {
+        return err
+    }
+    return nil
+})
+if err != nil {
+    return fmt.Errorf(""transaction: %w"", err)
+}","tx := db.Begin()
+tx.Create(&order)
+tx.Create(&payment)
+tx.Commit()
+// No error check, no rollback on failure",error,https://gorm.io/docs/transactions.html
+12,GORM Preloading,Preload and Joins,"Use Preload for eager loading associations and Joins for inner-join based loading.",Use Preload for has-many associations and Joins for belongs-to to reduce queries.,Do not load associations in a loop causing N+1 queries.,"var users []User
+db.Preload(""Orders"").Preload(""Orders.Items"").Find(&users)
+// Or use Joins for belongs-to
+var orders []Order
+db.Joins(""User"").Find(&orders)","var users []User
+db.Find(&users)
+for i := range users {
+    db.Model(&users[i]).Association(""Orders"").Find(&users[i].Orders)
+    // N+1 query problem
+}",warning,https://gorm.io/docs/preload.html
+13,sqlx Named Queries,Named Parameters,"Use sqlx named queries with :param syntax for readability and to bind struct fields automatically.",Use NamedExecContext with structs for insert and update operations.,Do not manually order positional parameters for large INSERT statements.,"type User struct {
+    ID    int    `db:""id""`
+    Name  string `db:""name""`
+    Email string `db:""email""`
+}
+u := User{Name: ""Alice"", Email: ""alice@example.com""}
+_, err := db.NamedExecContext(ctx, ""INSERT INTO users (name, email) VALUES (:name, :email)"", u)
+if err != nil {
+    return fmt.Errorf(""insert user: %w"", err)
+}","_, err := db.ExecContext(ctx, ""INSERT INTO users (name, email) VALUES ($1, $2)"", u.Name, u.Email)
+// With many columns, positional args become error-prone",info,https://pkg.go.dev/github.com/jmoiron/sqlx#DB.NamedExecContext
+14,sqlx Struct Scanning,Get and Select,"Use sqlx.Get for single rows and sqlx.Select for multiple rows to scan directly into structs.",Use db tag on struct fields and call Get or Select for automatic scanning.,Do not manually scan each column when sqlx can map them for you.,"type User struct {
+    ID    int    `db:""id""`
+    Name  string `db:""name""`
+    Email string `db:""email""`
+}
+var user User
+err := db.GetContext(ctx, &user, ""SELECT id, name, email FROM users WHERE id = $1"", id)
+if err != nil {
+    return User{}, fmt.Errorf(""get user: %w"", err)
+}
+var users []User
+err = db.SelectContext(ctx, &users, ""SELECT id, name, email FROM users WHERE active = true"")","rows, _ := db.QueryContext(ctx, ""SELECT id, name, email FROM users WHERE active = true"")
+var users []User
+for rows.Next() {
+    var u User
+    rows.Scan(&u.ID, &u.Name, &u.Email)
+    users = append(users, u)
+}
+// Manual scanning is verbose and error-prone",info,https://pkg.go.dev/github.com/jmoiron/sqlx#DB.GetContext
+15,sqlx In Clause,sqlx.In Expansion,"Use sqlx.In to expand slice arguments into SQL IN clauses safely.",Use sqlx.In then Rebind the query for the target database driver.,Do not build IN clauses by concatenating strings; it risks SQL injection.,"query, args, err := sqlx.In(""SELECT * FROM users WHERE id IN (?)"", ids)
+if err != nil {
+    return fmt.Errorf(""sqlx.In: %w"", err)
+}
+query = db.Rebind(query)
+var users []User
+err = db.SelectContext(ctx, &users, query, args...)
+if err != nil {
+    return fmt.Errorf(""select: %w"", err)
+}","idList := strings.Join(ids, "","")
+query := fmt.Sprintf(""SELECT * FROM users WHERE id IN (%s)"", idList)
+// SQL injection vulnerability",error,https://pkg.go.dev/github.com/jmoiron/sqlx#In
+16,sqlc Setup,sqlc.yaml Configuration,"Configure sqlc.yaml to define database engine and code generation settings.",Create a sqlc.yaml with version 2 schema specifying engine and query paths.,Do not skip the configuration file; sqlc requires it to generate correct code.,"# sqlc.yaml
+version: ""2""
+sql:
+  - engine: ""postgresql""
+    queries: ""query/""
+    schema: ""schema/""
+    gen:
+      go:
+        package: ""db""
+        out: ""internal/db""
+        sql_package: ""pgx/v5""
+        emit_json_tags: true","# No sqlc.yaml
+# Running sqlc generate without config
+# Results in: error: no sqlc.yaml found",error,https://docs.sqlc.dev/en/latest/reference/config.html
+17,sqlc Queries,Annotated SQL,"Write annotated SQL with -- name: and command type so sqlc generates type-safe Go functions.",Annotate every query with -- name: FuncName :command for proper generation.,Do not write unannotated SQL files; sqlc will skip them.,"-- name: GetUser :one
+SELECT id, name, email FROM users
+WHERE id = $1 LIMIT 1;
+
+-- name: ListUsers :many
+SELECT id, name, email FROM users
+ORDER BY name;
+
+-- name: CreateUser :one
+INSERT INTO users (name, email)
+VALUES ($1, $2)
+RETURNING id, name, email;","SELECT id, name, email FROM users WHERE id = $1;
+-- No annotation, sqlc ignores this query
+-- No generated Go code",warning,https://docs.sqlc.dev/en/latest/howto/select.html
+18,sqlc Type Safety,Generated Go Types,"Let sqlc generate Go structs and query functions; do not modify generated code manually.",Use the generated Queries struct and call generated methods with proper params.,Do not modify generated files; your changes will be overwritten on next sqlc generate.,"// Generated by sqlc -- DO NOT EDIT
+queries := db.New(pool)
+user, err := queries.GetUser(ctx, db.GetUserParams{ID: 42})
+if err != nil {
+    return fmt.Errorf(""get user: %w"", err)
+}
+fmt.Println(user.Name, user.Email)","// Hand-written query function duplicating sqlc output
+func GetUser(pool *pgxpool.Pool, id int) (User, error) {
+    var u User
+    err := pool.QueryRow(context.Background(), ""SELECT..."").Scan(&u.ID, &u.Name)
+    return u, err
+    // Bypasses sqlc type safety, drift risk
+}",warning,https://docs.sqlc.dev/en/latest/howto/query.html
+19,Migration Files,Up and Down SQL,"Write paired up and down migration files so migrations can be applied and rolled back cleanly.",Create numbered migration files with both up and down SQL.,Do not write migrations without a corresponding down file; rollback becomes impossible.,"-- 000001_create_users.up.sql
+CREATE TABLE users (
+    id BIGSERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 000001_create_users.down.sql
+DROP TABLE IF EXISTS users;","-- 000001_create_users.up.sql
+CREATE TABLE users (
+    id BIGSERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL
+);
+-- No down migration file exists
+-- Cannot rollback this migration",warning,https://github.com/golang-migrate/migrate/blob/master/MIGRATIONS.md
+20,golang-migrate,CLI and Go API,"Use golang-migrate to apply versioned migrations via the CLI or embed them in your Go application.",Use the Go API with embed.FS to bundle and apply migrations at startup.,Do not run raw SQL files manually; use a migration tool for versioning and tracking.,"//go:embed migrations/*.sql
+var migrationsFS embed.FS
+source, err := iofs.New(migrationsFS, ""migrations"")
+if err != nil {
+    log.Fatal(err)
+}
+m, err := migrate.NewWithSourceInstance(""iofs"", source, databaseURL)
+if err != nil {
+    log.Fatal(err)
+}
+if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+    log.Fatal(err)
+}","// Manually running SQL files
+data, _ := os.ReadFile(""migrations/001_create.sql"")
+db.Exec(string(data))
+// No version tracking, no rollback support",error,https://pkg.go.dev/github.com/golang-migrate/migrate/v4
+21,Batch Inserts,Bulk Insert Patterns,"Use multi-value INSERT or COPY for bulk inserts instead of inserting rows one at a time in a loop.",Build a single INSERT with multiple VALUE tuples or use COPY protocol.,Do not insert rows one by one in a loop; it is extremely slow for large datasets.,"valueStrings := make([]string, 0, len(users))
+valueArgs := make([]interface{}, 0, len(users)*2)
+for i, u := range users {
+    valueStrings = append(valueStrings, fmt.Sprintf(""($%d, $%d)"", i*2+1, i*2+2))
+    valueArgs = append(valueArgs, u.Name, u.Email)
+}
+query := fmt.Sprintf(""INSERT INTO users (name, email) VALUES %s"", strings.Join(valueStrings, "",""))
+_, err := db.ExecContext(ctx, query, valueArgs...)","for _, u := range users {
+    _, err := db.ExecContext(ctx, ""INSERT INTO users (name, email) VALUES ($1, $2)"", u.Name, u.Email)
+    if err != nil {
+        return err
+    }
+    // One round-trip per row, very slow
+}",warning,https://pkg.go.dev/database/sql#DB.ExecContext
+22,Soft Delete,deleted_at Pattern,"Use a nullable deleted_at timestamp column to mark records as deleted without physically removing them.",Add a deleted_at column and filter it in queries; GORM supports this natively.,Do not hard-delete records when you need audit trails or the ability to restore data.,"type User struct {
+    gorm.Model
+    Name  string
+    Email string
+}
+// Soft delete
+db.Delete(&user)
+// Query excludes soft-deleted by default
+db.Find(&users)
+// Include soft-deleted
+db.Unscoped().Find(&users)
+// Permanently delete
+db.Unscoped().Delete(&user)","// Hard delete with no recovery
+db.Exec(""DELETE FROM users WHERE id = ?"", id)
+// Data is permanently lost
+// No audit trail",info,https://gorm.io/docs/delete.html#Soft-Delete
+23,Repository Interface,Abstract DB Access,"Define a repository interface so business logic does not depend on a specific database implementation.",Define an interface and implement it with a concrete struct that holds the DB handle.,Do not pass *sql.DB or *gorm.DB directly into business logic; it couples layers tightly.,"type UserRepository interface {
+    GetByID(ctx context.Context, id int64) (*User, error)
+    Create(ctx context.Context, u *User) error
+    Update(ctx context.Context, u *User) error
+    Delete(ctx context.Context, id int64) error
+}
+type userRepo struct {
+    db *gorm.DB
+}
+func (r *userRepo) GetByID(ctx context.Context, id int64) (*User, error) {
+    var u User
+    if err := r.db.WithContext(ctx).First(&u, id).Error; err != nil {
+        return nil, fmt.Errorf(""get user %d: %w"", id, err)
+    }
+    return &u, nil
+}","func GetUser(db *gorm.DB, id int64) (*User, error) {
+    var u User
+    db.First(&u, id)
+    return &u, nil
+}
+// Direct DB dependency, untestable without real DB",warning,https://gorm.io/docs/method_chaining.html
+24,Testing with Testcontainers,Real DB Tests,"Use testcontainers-go to spin up a real database in Docker for integration tests.",Use testcontainers to create a disposable database container per test suite.,Do not mock the entire database layer for integration tests; it hides real query bugs.,"func TestUserRepo(t *testing.T) {
+    ctx := context.Background()
+    container, err := postgres.Run(ctx, ""postgres:16-alpine"",
+        postgres.WithDatabase(""testdb""),
+        postgres.WithUsername(""test""),
+        postgres.WithPassword(""test""),
+        testcontainers.WithWaitStrategy(
+            wait.ForLog(""database system is ready to accept connections"").
+                WithOccurrence(2).WithStartupTimeout(30*time.Second)),
+    )
+    testcontainers.CleanupContainer(t, container)
+    require.NoError(t, err)
+    connStr, err := container.ConnectionString(ctx, ""sslmode=disable"")
+    require.NoError(t, err)
+    db, err := sql.Open(""postgres"", connStr)
+    require.NoError(t, err)
+    // Run tests against real DB
+}","func TestUserRepo(t *testing.T) {
+    db := &mockDB{}
+    // All queries return hardcoded data
+    // Misses real SQL syntax errors and constraint violations
+}",info,https://golang.testcontainers.org/modules/postgres/
+25,Connection String,DSN Best Practices,"Build connection strings from environment variables with explicit parameter names instead of hardcoding.",Load DSN components from environment variables and set sslmode explicitly.,Do not hardcode credentials in source code or use sslmode=disable in production.,"dsn := fmt.Sprintf(""host=%s port=%s user=%s password=%s dbname=%s sslmode=require"",
+    os.Getenv(""DB_HOST""),
+    os.Getenv(""DB_PORT""),
+    os.Getenv(""DB_USER""),
+    os.Getenv(""DB_PASS""),
+    os.Getenv(""DB_NAME""),
+)
+db, err := sql.Open(""postgres"", dsn)
+if err != nil {
+    return fmt.Errorf(""open db: %w"", err)
+}","dsn := ""host=localhost port=5432 user=root password=secret dbname=mydb sslmode=disable""
+db, _ := sql.Open(""postgres"", dsn)
+// Hardcoded credentials, sslmode disabled",error,https://pkg.go.dev/github.com/lib/pq

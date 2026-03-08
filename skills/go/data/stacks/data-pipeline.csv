@@ -1,0 +1,700 @@
+No,Category,Guideline,Description,Do,Dont,Code Good,Code Bad,Severity,Docs URL
+1,Channel Pipeline,Use channels to connect multi-stage processing pipelines,"Build data pipelines by connecting stages with channels, where each stage is a goroutine that reads from an input channel and writes to an output channel",Compose pipeline stages as functions that accept and return channels with proper context cancellation,Use shared mutable state or direct function calls between processing stages,"func generate(ctx context.Context, nums ...int) <-chan int {
+    out := make(chan int)
+    go func() {
+        defer close(out)
+        for _, n := range nums {
+            select {
+            case out <- n:
+            case <-ctx.Done():
+                return
+            }
+        }
+    }()
+    return out
+}
+
+func square(ctx context.Context, in <-chan int) <-chan int {
+    out := make(chan int)
+    go func() {
+        defer close(out)
+        for n := range in {
+            select {
+            case out <- n * n:
+            case <-ctx.Done():
+                return
+            }
+        }
+    }()
+    return out
+}
+
+ctx, cancel := context.WithCancel(context.Background())
+defer cancel()
+for v := range square(ctx, generate(ctx, 2, 3, 4)) {
+    fmt.Println(v)
+}","// Tightly coupled stages with shared slice
+var results []int
+var mu sync.Mutex
+for _, n := range nums {
+    mu.Lock()
+    results = append(results, n*n)
+    mu.Unlock()
+}",high,https://go.dev/blog/pipelines
+2,Fan-Out Workers,Distribute work across multiple goroutines,"Start multiple goroutines reading from the same channel to parallelize CPU-bound or I/O-bound work across available cores",Launch a fixed number of worker goroutines consuming from a shared work channel,Spawn an unbounded number of goroutines per item which can exhaust memory and file descriptors,"func fanOut(ctx context.Context, in <-chan Task, workers int) <-chan Result {
+    out := make(chan Result)
+    var wg sync.WaitGroup
+    for i := 0; i < workers; i++ {
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
+            for task := range in {
+                select {
+                case out <- process(task):
+                case <-ctx.Done():
+                    return
+                }
+            }
+        }()
+    }
+    go func() {
+        wg.Wait()
+        close(out)
+    }()
+    return out
+}","// Unbounded goroutine creation
+for task := range tasks {
+    go func(t Task) {
+        resultCh <- process(t) // unbounded goroutines
+    }(task)
+}",critical,https://go.dev/blog/pipelines
+3,Fan-In Collector,Merge multiple channels into a single output channel,"Use a fan-in function to merge results from multiple concurrent producers into a single channel for downstream consumption",Use sync.WaitGroup to track completion and close the merged output channel when all inputs are done,Read from multiple channels in a loop without proper synchronization or close handling,"func fanIn(ctx context.Context, channels ...<-chan Result) <-chan Result {
+    out := make(chan Result)
+    var wg sync.WaitGroup
+    for _, ch := range channels {
+        wg.Add(1)
+        go func(c <-chan Result) {
+            defer wg.Done()
+            for v := range c {
+                select {
+                case out <- v:
+                case <-ctx.Done():
+                    return
+                }
+            }
+        }(ch)
+    }
+    go func() {
+        wg.Wait()
+        close(out)
+    }()
+    return out
+}","// Broken fan-in without WaitGroup
+func fanIn(channels ...<-chan Result) <-chan Result {
+    out := make(chan Result)
+    for _, ch := range channels {
+        go func(c <-chan Result) {
+            for v := range c {
+                out <- v
+            }
+        }(ch)
+    }
+    // out is never closed, downstream blocks forever
+    return out
+}",high,https://go.dev/blog/pipelines
+4,Backpressure,Use buffered channels to control pipeline flow,"Apply backpressure by using buffered channels so that fast producers slow down when consumers cannot keep up, preventing memory exhaustion",Size channel buffers based on measured throughput and memory constraints,Use unbounded queues or ever-growing slices that consume unlimited memory under load,"func producer(ctx context.Context, items []Item) <-chan Item {
+    // Buffer size limits in-flight items
+    out := make(chan Item, 100)
+    go func() {
+        defer close(out)
+        for _, item := range items {
+            select {
+            case out <- item:
+                // Consumer has capacity
+            case <-ctx.Done():
+                return
+            }
+        }
+    }()
+    return out
+}","// No backpressure, unbounded growth
+var queue []Item
+go func() {
+    for item := range source {
+        mu.Lock()
+        queue = append(queue, item) // grows without limit
+        mu.Unlock()
+    }
+}()",high,https://go.dev/doc/effective_go#channels
+5,Kafka Consumer,Use sarama consumer groups for reliable Kafka consumption,"Use IBM/sarama ConsumerGroup for partition assignment, rebalancing, and offset management in Go Kafka consumers",Implement the ConsumerGroupHandler interface with Setup Cleanup and ConsumeClaim methods,Use manual partition consumers without consumer group coordination for multi-instance deployments,"import ""github.com/IBM/sarama""
+
+type handler struct{}
+func (h handler) Setup(_ sarama.ConsumerGroupSession) error   { return nil }
+func (h handler) Cleanup(_ sarama.ConsumerGroupSession) error { return nil }
+func (h handler) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
+    for msg := range claim.Messages() {
+        if err := processMessage(msg.Value); err != nil {
+            log.Printf(""error processing message: %v"", err)
+            continue
+        }
+        sess.MarkMessage(msg, """")
+    }
+    return nil
+}
+
+config := sarama.NewConfig()
+config.Consumer.Group.Rebalance.GroupStrategies = []sarama.BalanceStrategy{sarama.NewBalanceStrategyRoundRobin()}
+config.Consumer.Offsets.Initial = sarama.OffsetOldest
+
+group, err := sarama.NewConsumerGroup(brokers, ""my-group"", config)
+if err != nil {
+    log.Fatalf(""creating consumer group: %v"", err)
+}
+defer group.Close()
+for {
+    if err := group.Consume(ctx, []string{""my-topic""}, handler{}); err != nil {
+        log.Printf(""consumer error: %v"", err)
+    }
+}","consumer, _ := sarama.NewConsumer(brokers, config)
+partConsumer, _ := consumer.ConsumePartition(""my-topic"", 0, sarama.OffsetNewest)
+for msg := range partConsumer.Messages() {
+    processMessage(msg.Value) // No offset commit, no rebalancing
+}",critical,https://pkg.go.dev/github.com/IBM/sarama#ConsumerGroup
+6,Kafka Producer,Use async producer with error handling for throughput,"Use sarama AsyncProducer for high-throughput message production with proper error and success channel handling",Drain both Errors and Successes channels from the async producer to prevent goroutine leaks,Ignore the Errors channel or use sync producer for high-throughput workloads,"import ""github.com/IBM/sarama""
+
+config := sarama.NewConfig()
+config.Producer.Return.Successes = true
+config.Producer.Return.Errors = true
+config.Producer.RequiredAcks = sarama.WaitForAll
+config.Producer.Compression = sarama.CompressionSnappy
+
+producer, err := sarama.NewAsyncProducer(brokers, config)
+if err != nil {
+    log.Fatalf(""creating producer: %v"", err)
+}
+defer producer.Close()
+
+go func() {
+    for err := range producer.Errors() {
+        log.Printf(""produce error topic=%s err=%v"", err.Msg.Topic, err.Err)
+    }
+}()
+go func() {
+    for range producer.Successes() {
+        // track delivery count
+    }
+}()
+
+producer.Input() <- &sarama.ProducerMessage{
+    Topic: ""events"",
+    Key:   sarama.StringEncoder(key),
+    Value: sarama.ByteEncoder(payload),
+}","producer, _ := sarama.NewAsyncProducer(brokers, config)
+producer.Input() <- &sarama.ProducerMessage{
+    Topic: ""events"",
+    Value: sarama.ByteEncoder(payload),
+}
+// Errors channel never drained - goroutine leak
+// Successes channel never drained - deadlock",critical,https://pkg.go.dev/github.com/IBM/sarama#AsyncProducer
+7,NATS Streaming,Use NATS JetStream for persistent messaging,"Use NATS JetStream for durable, at-least-once message delivery with consumer acknowledgments and replay capabilities",Create durable consumers with explicit acknowledgment and configure stream retention policies,Use core NATS without JetStream for workloads requiring delivery guarantees,"import ""github.com/nats-io/nats.go""
+
+nc, err := nats.Connect(""nats://localhost:4222"")
+if err != nil {
+    log.Fatalf(""connecting to NATS: %v"", err)
+}
+defer nc.Close()
+
+js, err := nc.JetStream()
+if err != nil {
+    log.Fatalf(""getting JetStream context: %v"", err)
+}
+
+_, err = js.AddStream(&nats.StreamConfig{
+    Name:      ""EVENTS"",
+    Subjects:  []string{""events.>""},
+    Retention: nats.LimitsPolicy,
+    MaxAge:    24 * time.Hour,
+})
+
+sub, err := js.Subscribe(""events.order"", func(msg *nats.Msg) {
+    if err := processOrder(msg.Data); err != nil {
+        msg.Nak()
+        return
+    }
+    msg.Ack()
+}, nats.Durable(""order-processor""), nats.ManualAck())","nc, _ := nats.Connect(""nats://localhost:4222"")
+nc.Subscribe(""events.order"", func(msg *nats.Msg) {
+    processOrder(msg.Data)
+    // No ack, no durability, messages lost on disconnect
+})",high,https://pkg.go.dev/github.com/nats-io/nats.go#JetStreamContext
+8,Batch Processing,Accumulate items and flush in batches,"Collect individual items into batches based on size or time thresholds before processing, reducing per-item overhead for I/O operations",Flush batches when either the batch size limit or a time deadline is reached whichever comes first,Process items one at a time for bulk operations or accumulate without a time-based flush deadline,"type Batcher[T any] struct {
+    size    int
+    timeout time.Duration
+    flush   func([]T) error
+}
+
+func (b *Batcher[T]) Run(ctx context.Context, in <-chan T) error {
+    batch := make([]T, 0, b.size)
+    timer := time.NewTimer(b.timeout)
+    defer timer.Stop()
+    for {
+        select {
+        case item, ok := <-in:
+            if !ok {
+                if len(batch) > 0 {
+                    return b.flush(batch)
+                }
+                return nil
+            }
+            batch = append(batch, item)
+            if len(batch) >= b.size {
+                if err := b.flush(batch); err != nil {
+                    return err
+                }
+                batch = batch[:0]
+                timer.Reset(b.timeout)
+            }
+        case <-timer.C:
+            if len(batch) > 0 {
+                if err := b.flush(batch); err != nil {
+                    return err
+                }
+                batch = batch[:0]
+            }
+            timer.Reset(b.timeout)
+        case <-ctx.Done():
+            if len(batch) > 0 {
+                return b.flush(batch)
+            }
+            return ctx.Err()
+        }
+    }
+}","// Process one item at a time
+for item := range in {
+    db.Exec(""INSERT INTO events (data) VALUES ($1)"", item)
+    // N database round-trips instead of 1 batch insert
+}",high,https://pkg.go.dev/time#Timer
+9,Rate-Limited Processing,Use a token bucket or ticker for rate-limited processing,"Apply rate limiting to pipeline stages that interact with external APIs or rate-limited resources to avoid throttling or bans",Use golang.org/x/time/rate Limiter to control throughput at a configurable rate,Process items as fast as possible without rate limiting when calling rate-limited external services,"import ""golang.org/x/time/rate""
+
+func rateLimited(ctx context.Context, in <-chan Request, rps int) <-chan Response {
+    out := make(chan Response)
+    limiter := rate.NewLimiter(rate.Limit(rps), rps)
+    go func() {
+        defer close(out)
+        for req := range in {
+            if err := limiter.Wait(ctx); err != nil {
+                return
+            }
+            resp, err := callExternalAPI(ctx, req)
+            if err != nil {
+                log.Printf(""api error: %v"", err)
+                continue
+            }
+            select {
+            case out <- resp:
+            case <-ctx.Done():
+                return
+            }
+        }
+    }()
+    return out
+}","// No rate limiting
+for req := range in {
+    resp, _ := callExternalAPI(ctx, req)
+    out <- resp
+    // Hits API as fast as possible, gets rate-limited or banned
+}",high,https://pkg.go.dev/golang.org/x/time/rate
+10,Graceful Drain,Finish in-flight work before shutting down pipeline,"On shutdown signal, stop accepting new items, drain remaining items from channels, and wait for all workers to complete",Use context cancellation to stop producers and sync.WaitGroup to wait for workers to finish in-flight items,Terminate the process immediately losing in-flight data that has been read from the source but not yet processed,"func runPipeline(ctx context.Context) error {
+    ctx, cancel := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT)
+    defer cancel()
+
+    items := make(chan Item, 100)
+    var wg sync.WaitGroup
+
+    // Producer stops on context cancellation
+    wg.Add(1)
+    go func() {
+        defer wg.Done()
+        defer close(items)
+        for {
+            item, err := fetchNext(ctx)
+            if err != nil {
+                return
+            }
+            select {
+            case items <- item:
+            case <-ctx.Done():
+                return
+            }
+        }
+    }()
+
+    // Workers drain remaining items after producer stops
+    for i := 0; i < 4; i++ {
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
+            for item := range items {
+                process(item)
+            }
+        }()
+    }
+
+    wg.Wait()
+    return nil
+}","func runPipeline() {
+    for item := range source {
+        go process(item)
+    }
+    // SIGTERM kills process, in-flight items lost
+}",critical,https://pkg.go.dev/os/signal#NotifyContext
+11,Error Channel,Use a separate channel for error handling in pipelines,"Route errors to a dedicated channel so that the main data path stays clean and errors can be handled centrally by a dedicated goroutine",Send errors to a separate buffered error channel and aggregate them in a dedicated error handler,Mix errors into the data channel or silently drop errors within pipeline stages,"type Result[T any] struct {
+    Value T
+    Err   error
+}
+
+func processStage(ctx context.Context, in <-chan Item) (<-chan Item, <-chan error) {
+    out := make(chan Item)
+    errs := make(chan error, 100)
+    go func() {
+        defer close(out)
+        defer close(errs)
+        for item := range in {
+            result, err := transform(item)
+            if err != nil {
+                select {
+                case errs <- fmt.Errorf(""transform item %s: %w"", item.ID, err):
+                case <-ctx.Done():
+                    return
+                }
+                continue
+            }
+            select {
+            case out <- result:
+            case <-ctx.Done():
+                return
+            }
+        }
+    }()
+    return out, errs
+}","func processStage(in <-chan Item) <-chan Item {
+    out := make(chan Item)
+    go func() {
+        defer close(out)
+        for item := range in {
+            result, err := transform(item)
+            if err != nil {
+                continue // error silently dropped
+            }
+            out <- result
+        }
+    }()
+    return out
+}",high,https://go.dev/blog/pipelines
+12,Dead Letter Queue,Route failed messages to a dead letter topic for later analysis,"Messages that fail processing after all retries should be sent to a dead letter queue for investigation, replay, or manual processing",Send permanently failed messages to a DLQ with original metadata and error details preserved,Discard messages that fail processing or retry indefinitely blocking the pipeline,"func processWithDLQ(ctx context.Context, consumer sarama.ConsumerGroupClaim, sess sarama.ConsumerGroupSession, dlqProducer sarama.SyncProducer) {
+    for msg := range consumer.Messages() {
+        var err error
+        for attempt := 0; attempt < 3; attempt++ {
+            if err = processMessage(msg.Value); err == nil {
+                break
+            }
+            time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
+        }
+        if err != nil {
+            headers := []sarama.RecordHeader{
+                {Key: []byte(""original-topic""), Value: []byte(msg.Topic)},
+                {Key: []byte(""error""), Value: []byte(err.Error())},
+                {Key: []byte(""failed-at""), Value: []byte(time.Now().Format(time.RFC3339))},
+            }
+            dlqProducer.SendMessage(&sarama.ProducerMessage{
+                Topic:   msg.Topic + "".dlq"",
+                Key:     sarama.ByteEncoder(msg.Key),
+                Value:   sarama.ByteEncoder(msg.Value),
+                Headers: headers,
+            })
+        }
+        sess.MarkMessage(msg, """")
+    }
+}","for msg := range consumer.Messages() {
+    if err := processMessage(msg.Value); err != nil {
+        log.Printf(""failed: %v"", err)
+        // Message lost forever, no DLQ, no retry
+    }
+    sess.MarkMessage(msg, """")
+}",high,https://pkg.go.dev/github.com/IBM/sarama#SyncProducer
+13,Metrics Collection,Track pipeline throughput and latency with Prometheus,"Instrument pipeline stages with Prometheus counters, histograms, and gauges to monitor throughput, latency, backlog size, and error rates",Register per-stage metrics for items processed and processing duration and current queue depth,Rely solely on logs to understand pipeline performance without quantitative metrics,"import (
+    ""github.com/prometheus/client_golang/prometheus""
+    ""github.com/prometheus/client_golang/prometheus/promauto""
+)
+
+var (
+    itemsProcessed = promauto.NewCounterVec(prometheus.CounterOpts{
+        Name: ""pipeline_items_processed_total"",
+        Help: ""Total items processed per stage"",
+    }, []string{""stage"", ""status""})
+
+    processingDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+        Name:    ""pipeline_processing_duration_seconds"",
+        Help:    ""Processing duration per stage"",
+        Buckets: []float64{.001, .005, .01, .05, .1, .5, 1},
+    }, []string{""stage""})
+
+    queueDepth = promauto.NewGaugeVec(prometheus.GaugeOpts{
+        Name: ""pipeline_queue_depth"",
+        Help: ""Current items in stage queue"",
+    }, []string{""stage""})
+)
+
+func instrumentedProcess(stage string, item Item) error {
+    timer := prometheus.NewTimer(processingDuration.WithLabelValues(stage))
+    defer timer.ObserveDuration()
+    if err := process(item); err != nil {
+        itemsProcessed.WithLabelValues(stage, ""error"").Inc()
+        return err
+    }
+    itemsProcessed.WithLabelValues(stage, ""success"").Inc()
+    return nil
+}","// Log-only monitoring
+func process(item Item) {
+    start := time.Now()
+    doWork(item)
+    log.Printf(""processed item in %v"", time.Since(start))
+    // No aggregation, no alerting, hard to dashboard
+}",medium,https://pkg.go.dev/github.com/prometheus/client_golang/prometheus
+14,Retry with Backoff,Retry transient errors with exponential backoff and jitter,"Use exponential backoff with jitter for retrying transient errors like network timeouts or rate limits, with a maximum retry count",Use a backoff library with configurable max retries and exponential delay with jitter,Retry immediately in a tight loop or use fixed delays without jitter causing thundering herd,"import ""github.com/cenkalti/backoff/v4""
+
+func processWithRetry(ctx context.Context, item Item) error {
+    b := backoff.NewExponentialBackOff()
+    b.MaxElapsedTime = 2 * time.Minute
+    b.InitialInterval = 100 * time.Millisecond
+    b.MaxInterval = 30 * time.Second
+
+    operation := func() error {
+        err := process(item)
+        if err != nil {
+            if isPermanentError(err) {
+                return backoff.Permanent(err)
+            }
+            return err
+        }
+        return nil
+    }
+    return backoff.Retry(operation, backoff.WithContext(b, ctx))
+}","func processWithRetry(item Item) error {
+    for i := 0; i < 100; i++ {
+        if err := process(item); err == nil {
+            return nil
+        }
+        time.Sleep(1 * time.Second) // fixed delay, thundering herd
+    }
+    return fmt.Errorf(""failed after 100 retries"")
+}",high,https://pkg.go.dev/github.com/cenkalti/backoff/v4
+15,Context Cancellation,Use context to propagate cancellation through the pipeline,"Pass context.Context through every pipeline stage so that cancellation at the top level propagates to all goroutines, enabling clean shutdown",Accept context as the first parameter in every pipeline stage and check ctx.Done() in select statements,Use global stop channels or boolean flags for cancellation instead of the standard context package,"func stage(ctx context.Context, in <-chan Item) <-chan Item {
+    out := make(chan Item)
+    go func() {
+        defer close(out)
+        for {
+            select {
+            case item, ok := <-in:
+                if !ok {
+                    return
+                }
+                result := transform(item)
+                select {
+                case out <- result:
+                case <-ctx.Done():
+                    return
+                }
+            case <-ctx.Done():
+                return
+            }
+        }
+    }()
+    return out
+}
+
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+defer cancel()
+output := stage3(ctx, stage2(ctx, stage1(ctx, input)))","var stopFlag bool
+func stage(in <-chan Item) <-chan Item {
+    out := make(chan Item)
+    go func() {
+        defer close(out)
+        for item := range in {
+            if stopFlag { // data race
+                return
+            }
+            out <- transform(item)
+        }
+    }()
+    return out
+}",critical,https://pkg.go.dev/context
+16,Worker Pool Pattern,Use a fixed-size worker pool with bounded concurrency,"Create a pool of worker goroutines reading from a shared job channel to limit concurrency, control resource usage, and maintain predictable throughput",Size the worker pool based on the bottleneck resource and use a semaphore or fixed goroutine count,Create a goroutine per task or use an unbounded pool that grows without limit,"type Pool struct {
+    workers int
+    jobs    chan func()
+    wg      sync.WaitGroup
+}
+
+func NewPool(workers int) *Pool {
+    p := &Pool{
+        workers: workers,
+        jobs:    make(chan func(), workers*2),
+    }
+    for i := 0; i < workers; i++ {
+        p.wg.Add(1)
+        go func() {
+            defer p.wg.Done()
+            for job := range p.jobs {
+                job()
+            }
+        }()
+    }
+    return p
+}
+
+func (p *Pool) Submit(job func()) { p.jobs <- job }
+
+func (p *Pool) Shutdown() {
+    close(p.jobs)
+    p.wg.Wait()
+}","// Unbounded goroutine creation
+for _, task := range tasks {
+    go func(t Task) {
+        process(t) // 1M tasks = 1M goroutines
+    }(task)
+}",high,https://go.dev/doc/effective_go#goroutines
+17,Memory Management,Use sync.Pool to reuse allocations in hot paths,"Use sync.Pool to recycle frequently allocated objects like byte buffers, reducing garbage collection pressure in high-throughput pipelines",Pool objects that are expensive to allocate and used frequently such as byte slices and struct buffers,Allocate new buffers on every iteration in a tight processing loop causing GC pressure,"import ""sync""
+
+var bufferPool = sync.Pool{
+    New: func() any {
+        b := make([]byte, 0, 4096)
+        return &b
+    },
+}
+
+func processItem(data []byte) ([]byte, error) {
+    bufPtr := bufferPool.Get().(*[]byte)
+    buf := (*bufPtr)[:0]
+    defer func() {
+        *bufPtr = buf
+        bufferPool.Put(bufPtr)
+    }()
+
+    buf = append(buf, data...)
+    // ... transform buf ...
+    result := make([]byte, len(buf))
+    copy(result, buf)
+    return result, nil
+}","func processItem(data []byte) ([]byte, error) {
+    buf := make([]byte, 0, 4096) // allocates every call
+    buf = append(buf, data...)
+    // ... transform buf ...
+    result := make([]byte, len(buf))
+    copy(result, buf)
+    return result, nil
+    // buf becomes garbage, GC pressure under high throughput
+}",medium,https://pkg.go.dev/sync#Pool
+18,Checkpoint/Resume,Track processing offsets for resumable pipelines,"Persist the last successfully processed offset or position so the pipeline can resume from where it left off after a restart",Commit offsets after successful processing and load the last offset on startup,Process items without tracking progress losing all work on restart,"type Checkpoint struct {
+    mu       sync.Mutex
+    store    *sql.DB
+    pipeline string
+}
+
+func (c *Checkpoint) Save(ctx context.Context, offset int64) error {
+    c.mu.Lock()
+    defer c.mu.Unlock()
+    _, err := c.store.ExecContext(ctx,
+        ""INSERT INTO checkpoints (pipeline, offset, updated_at) VALUES ($1, $2, NOW()) ON CONFLICT (pipeline) DO UPDATE SET offset = $2, updated_at = NOW()"",
+        c.pipeline, offset)
+    return err
+}
+
+func (c *Checkpoint) Load(ctx context.Context) (int64, error) {
+    var offset int64
+    err := c.store.QueryRowContext(ctx,
+        ""SELECT offset FROM checkpoints WHERE pipeline = $1"",
+        c.pipeline).Scan(&offset)
+    if err == sql.ErrNoRows {
+        return 0, nil
+    }
+    return offset, err
+}","// No checkpoint, restart reprocesses everything
+func process(items []Item) {
+    for _, item := range items {
+        doWork(item)
+    }
+    // Crash at item 999 of 1000 = restart from item 0
+}",high,https://pkg.go.dev/database/sql
+19,Data Serialization,Use Protocol Buffers for high-throughput internal serialization,"Use protobuf for internal service-to-service and pipeline serialization for smaller payloads, faster encoding/decoding, and schema evolution support",Use protobuf for internal pipeline data and JSON only for external API boundaries,Use JSON encoding for high-volume internal pipeline messages where performance matters,"import ""google.golang.org/protobuf/proto""
+
+// Protobuf: fast, compact, schema-enforced
+func encodeEvent(e *pb.Event) ([]byte, error) {
+    return proto.Marshal(e)
+}
+
+func decodeEvent(data []byte) (*pb.Event, error) {
+    e := &pb.Event{}
+    if err := proto.Unmarshal(data, e); err != nil {
+        return nil, fmt.Errorf(""unmarshal event: %w"", err)
+    }
+    return e, nil
+}
+
+// Benchmark: ~200ns encode, ~150ns decode, ~50 bytes per message","import ""encoding/json""
+
+// JSON for internal pipeline messages: slower, larger
+func encodeEvent(e *Event) ([]byte, error) {
+    return json.Marshal(e)
+}
+
+func decodeEvent(data []byte) (*Event, error) {
+    var e Event
+    if err := json.Unmarshal(data, &e); err != nil {
+        return nil, err
+    }
+    return &e, nil
+}
+
+// Benchmark: ~800ns encode, ~1200ns decode, ~200 bytes per message",medium,https://pkg.go.dev/google.golang.org/protobuf/proto
+20,End-to-End Testing,Write integration tests for complete pipeline flows,"Test the entire pipeline from input to output using real or containerized dependencies to verify correctness under realistic conditions",Use testcontainers-go to spin up real Kafka or database instances for integration tests,Test only individual functions in isolation without ever testing the complete pipeline flow,"import (
+    ""testing""
+    ""github.com/testcontainers/testcontainers-go""
+    ""github.com/testcontainers/testcontainers-go/modules/kafka""
+)
+
+func TestPipelineEndToEnd(t *testing.T) {
+    ctx := context.Background()
+    kafkaC, err := kafka.Run(ctx, ""confluentinc/confluent-local:7.5.0"")
+    if err != nil {
+        t.Fatalf(""starting kafka: %v"", err)
+    }
+    defer kafkaC.Terminate(ctx)
+
+    brokers, err := kafkaC.Brokers(ctx)
+    if err != nil {
+        t.Fatalf(""getting brokers: %v"", err)
+    }
+
+    // Produce test messages
+    producer := newProducer(t, brokers)
+    for i := 0; i < 100; i++ {
+        produce(t, producer, ""input-topic"", testEvent(i))
+    }
+
+    // Run pipeline
+    pCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+    defer cancel()
+    go RunPipeline(pCtx, brokers, ""input-topic"", ""output-topic"")
+
+    // Verify output
+    results := consumeAll(t, brokers, ""output-topic"", 100, 30*time.Second)
+    assert.Len(t, results, 100)
+    for _, r := range results {
+        assert.NotEmpty(t, r.ProcessedAt)
+    }
+}","func TestPipeline(t *testing.T) {
+    // Unit test only, no integration
+    result := transformItem(testItem)
+    assert.Equal(t, expected, result)
+    // Never tests Kafka, serialization, or multi-stage flow
+}",medium,https://pkg.go.dev/github.com/testcontainers/testcontainers-go

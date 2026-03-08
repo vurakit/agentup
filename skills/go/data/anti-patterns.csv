@@ -1,0 +1,546 @@
+No,Anti-Pattern,Category,Keywords,What People Do Wrong,Why Its Bad,Better Approach,Code Bad,Code Good,Severity,Detection
+1,Ignoring Errors,Error Handling,"error, ignore, underscore, discard","Developers discard errors using _ or simply do not check the return value of functions that return errors.","Silent failures make debugging nearly impossible. Data corruption and security vulnerabilities can go unnoticed in production.","Always check errors and handle them with context using fmt.Errorf and the %w verb.","result, _ := db.Query(""SELECT * FROM users"")
+defer result.Close()
+
+json.Unmarshal(data, &config)","result, err := db.Query(""SELECT * FROM users"")
+if err != nil {
+	return fmt.Errorf(""query users: %w"", err)
+}
+defer result.Close()
+
+if err := json.Unmarshal(data, &config); err != nil {
+	return fmt.Errorf(""unmarshal config: %w"", err)
+}",Critical,golangci-lint (errcheck)
+2,Goroutine Leak,Concurrency,"goroutine, leak, channel, context","Goroutines are launched but never terminate because they block on a channel read/write or lack a cancellation mechanism.","Leaked goroutines consume memory and CPU indefinitely, eventually causing OOM crashes in long-running services.","Use context.Context for cancellation and ensure every goroutine has a clear exit path.","func watch(ch chan string) {
+	go func() {
+		for {
+			val := <-ch
+			process(val)
+		}
+	}()
+}","func watch(ctx context.Context, ch chan string) {
+	go func() {
+		for {
+			select {
+			case val := <-ch:
+				process(val)
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+}",Critical,go vet
+3,Naked Return,Style,"naked return, named return, readability","Using bare return statements in long functions with named return values making it unclear what values are actually being returned.","Naked returns obscure the actual return values, making code hard to read and prone to bugs when the function is modified.","Use explicit return values in functions longer than a few lines. Reserve naked returns for very short functions.","func parse(s string) (n int, err error) {
+	n, err = strconv.Atoi(s)
+	if err != nil {
+		return
+	}
+	if n < 0 {
+		err = errors.New(""negative"")
+		return
+	}
+	n = n * 2
+	return
+}","func parse(s string) (int, error) {
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, fmt.Errorf(""parse %q: %w"", s, err)
+	}
+	if n < 0 {
+		return 0, errors.New(""negative"")
+	}
+	return n * 2, nil
+}",Medium,code review
+4,Interface Pollution,Design,"interface, pollution, premature, abstraction","Defining interfaces before there is more than one implementation or defining large interfaces with many methods that no consumer actually needs in full.","Unnecessary interfaces add complexity without benefit, make code harder to navigate, and violate the interface segregation principle.","Define interfaces at the consumer side with only the methods needed. Let interfaces emerge from usage, not from prediction.","type Storage interface {
+	Get(key string) ([]byte, error)
+	Set(key string, val []byte) error
+	Delete(key string) error
+	List(prefix string) ([]string, error)
+	Watch(key string) chan []byte
+	Close() error
+}
+
+type MemStore struct{}","type Getter interface {
+	Get(key string) ([]byte, error)
+}
+
+func Load(g Getter, key string) (Config, error) {
+	data, err := g.Get(key)
+	if err != nil {
+		return Config{}, err
+	}
+	var cfg Config
+	err = json.Unmarshal(data, &cfg)
+	return cfg, err
+}",Medium,code review
+5,Circular Dependency,Design,"circular, import, dependency, package","Package A imports package B and package B imports package A, either directly or through a chain of intermediate packages.","Go does not allow circular imports and compilation will fail. This usually indicates poor package structure and tangled responsibilities.","Extract shared types into a separate package or use interfaces to break the dependency cycle.","// package a
+import ""myapp/b""
+
+func DoA() { b.DoB() }
+
+// package b
+import ""myapp/a""
+
+func DoB() { a.DoA() }","// package types
+type Doer interface { Do() }
+
+// package a
+func DoA(d types.Doer) { d.Do() }
+
+// package b
+type B struct{}
+func (b B) Do() {}",High,go build
+6,Global Mutable State,Design,"global, state, mutable, singleton","Using package-level variables that are mutated at runtime, creating hidden dependencies and making code impossible to test concurrently.","Global mutable state causes data races in concurrent programs, makes testing unreliable, and creates hidden coupling between packages.","Pass dependencies explicitly through constructors or function parameters. Use dependency injection.","var db *sql.DB
+var cache = make(map[string]string)
+
+func GetUser(id string) (User, error) {
+	if v, ok := cache[id]; ok {
+		return unmarshal(v)
+	}
+	return queryDB(db, id)
+}","type Service struct {
+	db    *sql.DB
+	cache map[string]string
+}
+
+func NewService(db *sql.DB) *Service {
+	return &Service{db: db, cache: make(map[string]string)}
+}
+
+func (s *Service) GetUser(id string) (User, error) {
+	if v, ok := s.cache[id]; ok {
+		return unmarshal(v)
+	}
+	return queryDB(s.db, id)
+}",High,code review
+7,Complex init(),Design,"init, initialization, side effects, startup","Performing complex operations in init() such as opening database connections, reading files, or making network calls.","init() runs before main() with no way to handle errors gracefully, making failures hard to diagnose and impossible to test.","Move complex initialization to explicit setup functions called from main() where errors can be properly handled.","func init() {
+	var err error
+	db, err = sql.Open(""postgres"", os.Getenv(""DB_URL""))
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err = db.Ping(); err != nil {
+		log.Fatal(err)
+	}
+}","func SetupDB(dsn string) (*sql.DB, error) {
+	db, err := sql.Open(""postgres"", dsn)
+	if err != nil {
+		return nil, fmt.Errorf(""open db: %w"", err)
+	}
+	if err = db.Ping(); err != nil {
+		return nil, fmt.Errorf(""ping db: %w"", err)
+	}
+	return db, nil
+}",High,code review
+8,Premature Abstraction,Design,"abstraction, interface, generics, overengineering","Creating generic frameworks, interfaces, or abstraction layers before understanding the actual requirements or having more than one concrete use case.","Premature abstractions add complexity, slow down development, and often need to be rewritten once real requirements emerge.","Write concrete implementations first. Extract interfaces and abstractions only when a second use case demands it.","type DataProcessor[T any] interface {
+	Validate(T) error
+	Transform(T) (T, error)
+	Store(T) error
+}
+
+type Pipeline[T any] struct {
+	processors []DataProcessor[T]
+}","func ProcessUser(u User) error {
+	if u.Name == """" {
+		return errors.New(""name required"")
+	}
+	u.Name = strings.TrimSpace(u.Name)
+	return db.Save(u)
+}",Medium,code review
+9,Not Closing Response Body,Error Handling,"http, response, body, close, leak","Forgetting to close http.Response.Body after making HTTP requests, causing file descriptor and connection leaks.","Unclosed response bodies keep TCP connections open, eventually exhausting file descriptors and causing the application to stop accepting connections.","Always defer resp.Body.Close() immediately after checking the error from the HTTP call.","func fetch(url string) ([]byte, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	return io.ReadAll(resp.Body)
+}","func fetch(url string) ([]byte, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(resp.Body)
+}",Critical,golangci-lint (bodyclose)
+10,String Concatenation in Loops,Performance,"string, concatenation, loop, allocation","Using the += operator to build strings inside loops, which creates a new string allocation on every iteration.","Each concatenation allocates a new string and copies all previous content, resulting in O(n^2) time and memory behavior.","Use strings.Builder or bytes.Buffer to accumulate string content efficiently in loops.","func join(items []string) string {
+	var result string
+	for _, s := range items {
+		result += s + "", ""
+	}
+	return result
+}","func join(items []string) string {
+	var b strings.Builder
+	for i, s := range items {
+		if i > 0 {
+			b.WriteString("", "")
+		}
+		b.WriteString(s)
+	}
+	return b.String()
+}",Medium,golangci-lint (gocritic)
+11,Passing Mutex by Value,Concurrency,"mutex, copy, value, sync","Passing a sync.Mutex or a struct containing a mutex by value, which copies the mutex and makes the copy useless for synchronization.","A copied mutex is a completely independent lock. Two goroutines locking different copies get no mutual exclusion, leading to data races.","Always pass mutexes by pointer or embed them in structs that are passed by pointer.","type SafeCounter struct {
+	mu sync.Mutex
+	n  int
+}
+
+func increment(c SafeCounter) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.n++
+}","type SafeCounter struct {
+	mu sync.Mutex
+	n  int
+}
+
+func increment(c *SafeCounter) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.n++
+}",Critical,go vet (copylocks)
+12,time.Sleep in Tests,Testing,"test, sleep, flaky, timing","Using time.Sleep to wait for goroutines or async operations to complete in tests instead of using proper synchronization.","Sleep-based tests are flaky: too short and they fail, too long and the test suite becomes painfully slow. Timing varies across machines.","Use channels, sync.WaitGroup, or polling with short deadlines to synchronize test assertions.","func TestAsync(t *testing.T) {
+	go startWorker()
+	time.Sleep(2 * time.Second)
+	if !workerReady() {
+		t.Fatal(""worker not ready"")
+	}
+}","func TestAsync(t *testing.T) {
+	ready := make(chan struct{})
+	go startWorkerWithSignal(ready)
+	select {
+	case <-ready:
+	case <-time.After(5 * time.Second):
+		t.Fatal(""timed out waiting for worker"")
+	}
+}",Medium,code review
+13,Checking Error String,Error Handling,"error, string, contains, matching","Using strings.Contains or string comparison on error.Error() output to determine the type of error.","Error messages are not part of the API contract and can change between versions, breaking your error handling logic silently.","Use errors.Is and errors.As to check error types and values. Define sentinel errors or custom error types.","if strings.Contains(err.Error(), ""not found"") {
+	handleNotFound()
+} else if strings.Contains(err.Error(), ""timeout"") {
+	handleTimeout()
+}","if errors.Is(err, ErrNotFound) {
+	handleNotFound()
+}
+
+var netErr *net.OpError
+if errors.As(err, &netErr) && netErr.Timeout() {
+	handleTimeout()
+}",High,golangci-lint (goerr113)
+14,Over-using Channels,Concurrency,"channel, mutex, overuse, complexity","Using channels for everything including simple shared state protection where a mutex would be simpler and more efficient.","Channels add complexity with goroutine management, deadlock risks, and buffering decisions. They are overkill for simple mutual exclusion.","Use sync.Mutex for protecting shared state. Reserve channels for communication between goroutines and signaling.","type Counter struct {
+	ch chan func()
+	n  int
+}
+
+func NewCounter() *Counter {
+	c := &Counter{ch: make(chan func())}
+	go func() {
+		for f := range c.ch {
+			f()
+		}
+	}()
+	return c
+}
+
+func (c *Counter) Inc() {
+	done := make(chan struct{})
+	c.ch <- func() { c.n++; close(done) }
+	<-done
+}","type Counter struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (c *Counter) Inc() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.n++
+}
+
+func (c *Counter) Get() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.n
+}",Medium,code review
+15,Deep Package Nesting,Design,"package, nesting, structure, flat","Creating deeply nested package hierarchies like internal/services/user/repository/postgres that mirror Java or C# project structures.","Deep nesting makes import paths long, navigation difficult, and often leads to packages with single files. Go favors flat, purpose-driven packages.","Keep a flat package structure. Group by feature or responsibility, not by layer.","// internal/services/user/repository/postgres/queries/user.go
+package queries
+
+func FindUser(id int) {}
+
+// internal/services/user/repository/postgres/store.go
+package postgres
+
+import ""app/internal/services/user/repository/postgres/queries""","// internal/user/store.go
+package user
+
+type Store struct {
+	db *sql.DB
+}
+
+func (s *Store) Find(id int) (User, error) {
+	var u User
+	err := s.db.QueryRow(""SELECT id, name FROM users WHERE id=$1"", id).Scan(&u.ID, &u.Name)
+	return u, err
+}",Low,code review
+16,Not Using Context,Concurrency,"context, timeout, cancellation, propagation","Omitting context.Context from functions that do I/O, make network calls, or run long operations. Not propagating context through call chains.","Without context there is no way to enforce timeouts or cancel work. Hung requests consume resources indefinitely and cannot be cleaned up.","Accept context.Context as the first parameter in all I/O functions and propagate it through the entire call chain.","func GetUser(id string) (*User, error) {
+	resp, err := http.Get(apiURL + ""/users/"" + id)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var u User
+	err = json.NewDecoder(resp.Body).Decode(&u)
+	return &u, err
+}","func GetUser(ctx context.Context, id string) (*User, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL+""/users/""+id, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var u User
+	err = json.NewDecoder(resp.Body).Decode(&u)
+	return &u, err
+}",High,golangci-lint (noctx)
+17,Concrete Return Types in Libraries,Design,"interface, return, library, coupling","Library functions that return concrete types instead of interfaces, tightly coupling consumers to specific implementations.","Callers cannot substitute alternative implementations for testing or extension. This makes the library harder to use and test.","Return interfaces from library constructors when the consumer only needs a subset of methods. Accept interfaces at consumption site.","// library package
+func NewCache() *RedisCache {
+	return &RedisCache{}
+}
+
+// consumer cannot mock this in tests","// library package
+type Cache interface {
+	Get(ctx context.Context, key string) ([]byte, error)
+	Set(ctx context.Context, key string, val []byte, ttl time.Duration) error
+}
+
+func NewRedisCache(addr string) Cache {
+	return &redisCache{addr: addr}
+}",Medium,code review
+18,Panic for Control Flow,Error Handling,"panic, control flow, recover, error","Using panic and recover as a try-catch mechanism for expected error conditions instead of returning errors.","Panic is for truly unrecoverable situations. Using it for flow control makes code fragile, hard to follow, and violates Go conventions.","Return errors for expected failure conditions. Reserve panic for programmer errors and invariant violations.","func mustParseInt(s string) int {
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		panic(err)
+	}
+	return n
+}
+
+func handleRequest(s string) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Println(""recovered:"", r)
+		}
+	}()
+	n := mustParseInt(s)
+	fmt.Println(n)
+}","func parseInt(s string) (int, error) {
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, fmt.Errorf(""parse int %q: %w"", s, err)
+	}
+	return n, nil
+}
+
+func handleRequest(s string) {
+	n, err := parseInt(s)
+	if err != nil {
+		log.Println(""error:"", err)
+		return
+	}
+	fmt.Println(n)
+}",High,golangci-lint (gocritic)
+19,Not Buffering I/O,Performance,"buffer, io, write, performance","Writing many small chunks directly to os.File or net.Conn without using a buffered writer, causing excessive system calls.","Each small Write call triggers a system call. For thousands of small writes this creates massive overhead and poor throughput.","Wrap writers in bufio.NewWriter and flush when done. Use bufio.NewReader for small reads.","func writeLines(f *os.File, lines []string) error {
+	for _, line := range lines {
+		_, err := f.WriteString(line + ""\n"")
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}","func writeLines(f *os.File, lines []string) error {
+	w := bufio.NewWriter(f)
+	for _, line := range lines {
+		if _, err := w.WriteString(line + ""\n""); err != nil {
+			return err
+		}
+	}
+	return w.Flush()
+}",Medium,code review
+20,Slice Append Without Pre-allocation,Performance,"slice, append, capacity, allocation","Appending to a nil or zero-length slice in a loop without pre-allocating capacity when the final size is known or estimable.","Without pre-allocation the runtime must repeatedly grow the underlying array, copying all elements each time. This causes O(n) allocations.","Use make([]T, 0, n) to pre-allocate capacity when you know or can estimate the number of elements.","func toStrings(nums []int) []string {
+	var result []string
+	for _, n := range nums {
+		result = append(result, strconv.Itoa(n))
+	}
+	return result
+}","func toStrings(nums []int) []string {
+	result := make([]string, 0, len(nums))
+	for _, n := range nums {
+		result = append(result, strconv.Itoa(n))
+	}
+	return result
+}",Low,golangci-lint (prealloc)
+21,Concurrent Map Access Without Sync,Concurrency,"map, concurrent, race, sync","Reading and writing to a Go map from multiple goroutines without any synchronization mechanism.","Go maps are not safe for concurrent use. Concurrent reads and writes cause a runtime panic with fatal error: concurrent map writes.","Use sync.Mutex to protect map access or use sync.Map for cases with many reads and few writes.","var users = make(map[string]*User)
+
+func SetUser(id string, u *User) {
+	users[id] = u
+}
+
+func GetUser(id string) *User {
+	return users[id]
+}
+
+// called from multiple goroutines","type UserStore struct {
+	mu    sync.RWMutex
+	users map[string]*User
+}
+
+func (s *UserStore) Set(id string, u *User) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.users[id] = u
+}
+
+func (s *UserStore) Get(id string) *User {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.users[id]
+}",Critical,go build -race
+22,Mutex Where Atomic Suffices,Performance,"mutex, atomic, counter, overhead","Using a full sync.Mutex to protect simple integer counters or boolean flags that could use atomic operations.","Mutexes have higher overhead than atomic operations due to goroutine scheduling. For simple values atomics are lock-free and faster.","Use sync/atomic or atomic types for simple counters, flags, and pointers that need concurrent access.","type Stats struct {
+	mu       sync.Mutex
+	requests int64
+}
+
+func (s *Stats) Inc() {
+	s.mu.Lock()
+	s.requests++
+	s.mu.Unlock()
+}
+
+func (s *Stats) Get() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.requests
+}","type Stats struct {
+	requests atomic.Int64
+}
+
+func (s *Stats) Inc() {
+	s.requests.Add(1)
+}
+
+func (s *Stats) Get() int64 {
+	return s.requests.Load()
+}",Low,code review
+23,Importing Entire Package for One Function,Design,"import, dependency, coupling, bloat","Importing a large third-party package just to use a single small utility function, adding unnecessary dependency weight.","Large dependencies increase binary size, build time, and supply chain risk. They also make vendoring and updates more burdensome.","Copy small utility functions or use the standard library. Only import packages when you need substantial functionality.","import ""github.com/some/huge/framework""
+
+func isBlank(s string) bool {
+	return framework.StringUtils.IsBlank(s)
+}","func isBlank(s string) bool {
+	return strings.TrimSpace(s) == """"
+}",Low,code review
+24,Not Running Static Analysis,Style,"lint, vet, static analysis, CI","Not integrating go vet and golangci-lint into the development workflow or CI pipeline, missing bugs that tools catch automatically.","Many bugs like copylocks, printf format mismatches, unchecked errors, and shadowed variables are trivially caught by static analysis.","Run go vet and golangci-lint in CI. Configure golangci-lint with appropriate linters enabled for your project.","// .github/workflows/ci.yml
+# No lint step
+steps:
+  - run: go build ./...
+  - run: go test ./...","// .github/workflows/ci.yml
+steps:
+  - run: go vet ./...
+  - uses: golangci/golangci-lint-action@v4
+    with:
+      version: latest
+  - run: go build ./...
+  - run: go test ./...",High,CI pipeline review
+25,Overusing Reflection,Performance,"reflect, runtime, type safety, performance","Using the reflect package for tasks that could be solved with generics, interfaces, type switches, or code generation.","Reflection bypasses compile-time type checking, is 10-100x slower than direct calls, and produces cryptic runtime panics instead of compiler errors.","Use generics for type-parameterized code, type switches for known type sets, and code generation for repetitive boilerplate.","func setField(obj interface{}, name string, value interface{}) error {
+	v := reflect.ValueOf(obj).Elem()
+	f := v.FieldByName(name)
+	if !f.IsValid() {
+		return fmt.Errorf(""no field %s"", name)
+	}
+	f.Set(reflect.ValueOf(value))
+	return nil
+}","type Config struct {
+	Host string
+	Port int
+}
+
+func (c *Config) SetHost(h string) { c.Host = h }
+func (c *Config) SetPort(p int)    { c.Port = p }
+
+// Or with generics for collections:
+func Map[T, U any](s []T, f func(T) U) []U {
+	r := make([]U, len(s))
+	for i, v := range s {
+		r[i] = f(v)
+	}
+	return r
+}",Medium,code review
+26,Plaintext Password Storage,Security,"plaintext,password,plain text,store password,credential,hash","Storing user passwords as plaintext or using weak hashing (MD5, SHA256) instead of bcrypt/argon2","Passwords leaked in data breach are immediately usable. No protection against rainbow tables. Violates every security standard.","Use bcrypt (cost 12+) or argon2id for password hashing. Never store or log plaintext passwords.","type User struct {
+	ID       int64
+	Email    string
+	Password string // plaintext!
+}
+func CreateUser(email, password string) {
+	db.Exec(""INSERT INTO users (email, password) VALUES ($1, $2)"", email, password)
+}","import ""golang.org/x/crypto/bcrypt""
+
+type User struct {
+	ID           int64
+	Email        string
+	PasswordHash string
+}
+func CreateUser(email, password string) error {
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), 12)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(""INSERT INTO users (email, password_hash) VALUES ($1, $2)"", email, string(hash))
+	return err
+}",Critical,code review
+27,Role Check in Every Handler,Authorization,"role,handler,admin,check,duplicate,middleware,auth","Checking user roles inside every handler function instead of using middleware","Duplicated authorization logic across handlers. Easy to forget a check in one handler. Hard to audit which endpoints require which roles. Changes require updating every handler.","Use a middleware function (RequireRole or AdminOnly) that runs before handlers. Apply middleware at the route group level with chi or similar router.","func ListUsers(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value(""claims"").(Claims)
+	if claims.Role != ""admin"" {
+		http.Error(w, ""forbidden"", 403)
+		return
+	}
+	// handler logic...
+}
+func DeleteUser(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value(""claims"").(Claims)
+	if claims.Role != ""admin"" { // same check duplicated
+		http.Error(w, ""forbidden"", 403)
+		return
+	}
+	// handler logic...
+}","func AdminOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		claims, ok := r.Context().Value(ClaimsKey).(Claims)
+		if !ok || claims.Role != ""admin"" {
+			http.Error(w, `{""error"":""forbidden""}`, 403)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+// r.With(AuthMiddleware(secret), AdminOnly).Get(""/admin/users"", ListUsers)
+// r.With(AuthMiddleware(secret), AdminOnly).Delete(""/admin/users/{id}"", DeleteUser)",High,code review
+28,JWT Secret in Source Code,Security,"jwt,secret,hardcode,source code,env,credential,key","Hardcoding JWT signing secrets or API keys directly in Go source code","Secrets committed to git are visible to anyone with repo access. Rotating secrets requires code changes and redeployment. Secrets in compiled binaries can be extracted.","Load secrets from environment variables or a secrets manager. Never commit secrets to version control. Use .env files for local development only.","var jwtSecret = ""my-super-secret-key-123"" // hardcoded!
+
+func GenerateToken(userID int64) string {
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		""sub"": userID,
+	})
+	t, _ := token.SignedString([]byte(jwtSecret))
+	return t
+}","type Config struct {
+	JWTSecret string
+}
+func LoadConfig() *Config {
+	return &Config{
+		JWTSecret: os.Getenv(""JWT_SECRET""),
+	}
+}
+func GenerateToken(secret string, userID int64) (string, error) {
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		""sub"": userID,
+		""exp"": time.Now().Add(15 * time.Minute).Unix(),
+	})
+	return token.SignedString([]byte(secret))
+}",Critical,golangci-lint

@@ -1,0 +1,1088 @@
+No,Guideline,Category,Keywords,Description,Do,Dont,Code Good,Code Bad,Severity,Docs URL
+1,Accept Interfaces Return Structs,Design,"interfaces, parameters, return types","Functions should accept interfaces as parameters for flexibility but return concrete structs so callers get full access to the type's methods and fields.",Accept interface parameters to allow any implementation to be passed in. Return concrete struct types so callers have full access.,Return interfaces from functions or accept concrete types as parameters when an interface would suffice.,"package storage
+
+type Reader interface {
+	Read(key string) ([]byte, error)
+}
+
+type FileStore struct {
+	basePath string
+}
+
+func (f *FileStore) Read(key string) ([]byte, error) {
+	return os.ReadFile(filepath.Join(f.basePath, key))
+}
+
+func NewFileStore(base string) *FileStore {
+	return &FileStore{basePath: base}
+}
+
+func ProcessData(r Reader) error {
+	data, err := r.Read(""config"")
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(data))
+	return nil
+}","package storage
+
+type Reader interface {
+	Read(key string) ([]byte, error)
+}
+
+type FileStore struct {
+	basePath string
+}
+
+func (f *FileStore) Read(key string) ([]byte, error) {
+	return os.ReadFile(filepath.Join(f.basePath, key))
+}
+
+// Bad: returning an interface hides the concrete type
+func NewFileStore(base string) Reader {
+	return &FileStore{basePath: base}
+}
+
+// Bad: accepting concrete type reduces flexibility
+func ProcessData(f *FileStore) error {
+	data, err := f.Read(""config"")
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(data))
+	return nil
+}",Critical,https://go.dev/wiki/CodeReviewComments#interfaces
+2,Keep Interfaces Small (1-3 methods),Design,"interfaces, single responsibility, small","Prefer small interfaces with one to three methods. Smaller interfaces are easier to implement, compose, and mock. The Go standard library exemplifies this with io.Reader and io.Writer.",Define focused interfaces with only the methods needed by the consumer. Compose larger behaviors from small interfaces.,Create large interfaces with many methods that force implementers to provide unnecessary functionality.,"package notifier
+
+type Sender interface {
+	Send(to string, msg string) error
+}
+
+type EmailSender struct {
+	smtpHost string
+}
+
+func (e *EmailSender) Send(to string, msg string) error {
+	fmt.Printf(""Sending email to %s via %s: %s\n"", to, e.smtpHost, msg)
+	return nil
+}
+
+func NotifyUser(s Sender, user string, message string) error {
+	return s.Send(user, message)
+}","package notifier
+
+type Messenger interface {
+	Send(to string, msg string) error
+	SendBulk(to []string, msg string) error
+	Retry(to string, msg string, attempts int) error
+	ListSent() ([]string, error)
+	DeleteMessage(id string) error
+	GetStatus(id string) (string, error)
+}
+
+type EmailSender struct {
+	smtpHost string
+}
+
+func (e *EmailSender) Send(to string, msg string) error {
+	return nil
+}
+func (e *EmailSender) SendBulk(to []string, msg string) error {
+	return nil
+}
+func (e *EmailSender) Retry(to string, msg string, attempts int) error {
+	return nil
+}
+func (e *EmailSender) ListSent() ([]string, error) {
+	return nil, nil
+}
+func (e *EmailSender) DeleteMessage(id string) error {
+	return nil
+}
+func (e *EmailSender) GetStatus(id string) (string, error) {
+	return """", nil
+}",Critical,https://go.dev/wiki/CodeReviewComments#interfaces
+3,Define Interfaces at Consumer Side,Design,"interfaces, consumer, dependency inversion","Interfaces should be defined in the package that uses them, not in the package that implements them. This follows the dependency inversion principle and keeps packages decoupled.",Define the interface where it is consumed. Let the implementing package remain unaware of the interface.,Define interfaces in the provider package and force consumers to import them.,"package orderservice
+
+// Interface defined by the consumer
+type PaymentProcessor interface {
+	Charge(amount float64, currency string) (string, error)
+}
+
+type OrderService struct {
+	payments PaymentProcessor
+}
+
+func NewOrderService(p PaymentProcessor) *OrderService {
+	return &OrderService{payments: p}
+}
+
+func (o *OrderService) PlaceOrder(total float64) (string, error) {
+	txID, err := o.payments.Charge(total, ""USD"")
+	if err != nil {
+		return """", fmt.Errorf(""payment failed: %w"", err)
+	}
+	return txID, nil
+}","package payments
+
+// Bad: interface defined in the provider package
+type PaymentProcessor interface {
+	Charge(amount float64, currency string) (string, error)
+	Refund(txID string) error
+	GetBalance() (float64, error)
+}
+
+type StripeProcessor struct{}
+
+func (s *StripeProcessor) Charge(amount float64, currency string) (string, error) {
+	return ""tx_123"", nil
+}
+func (s *StripeProcessor) Refund(txID string) error {
+	return nil
+}
+func (s *StripeProcessor) GetBalance() (float64, error) {
+	return 1000.0, nil
+}",Critical,https://go.dev/wiki/CodeReviewComments#interfaces
+4,io.Reader/io.Writer Composition,Composition,"io.Reader, io.Writer, composition, streams","Compose io.Reader and io.Writer interfaces to build powerful data pipelines. Functions that accept these interfaces work with files, network connections, buffers, and any custom implementation.",Use io.Reader and io.Writer to build composable data processing functions that work with any data source or sink.,Accept concrete types like *os.File or *bytes.Buffer when io.Reader or io.Writer would make the function more reusable.,"package transform
+
+import (
+	""io""
+	""strings""
+)
+
+type UpperReader struct {
+	r io.Reader
+}
+
+func NewUpperReader(r io.Reader) *UpperReader {
+	return &UpperReader{r: r}
+}
+
+func (u *UpperReader) Read(p []byte) (int, error) {
+	n, err := u.r.Read(p)
+	for i := 0; i < n; i++ {
+		p[i] = byte(strings.ToUpper(string(p[i : i+1]))[0])
+	}
+	return n, err
+}
+
+func CopyUpper(dst io.Writer, src io.Reader) (int64, error) {
+	upper := NewUpperReader(src)
+	return io.Copy(dst, upper)
+}","package transform
+
+import (
+	""bytes""
+	""os""
+	""strings""
+)
+
+// Bad: only works with *os.File, not composable
+func CopyUpperFromFile(dst *bytes.Buffer, src *os.File) (int64, error) {
+	data, err := os.ReadAll(src)
+	if err != nil {
+		return 0, err
+	}
+	upper := strings.ToUpper(string(data))
+	n, err := dst.WriteString(upper)
+	return int64(n), err
+}",High,https://pkg.go.dev/io#Reader
+5,Interface Embedding,Composition,"embedding, composition, interface hierarchy","Embed small interfaces into larger ones to compose behavior. This creates a clear hierarchy and allows consumers to depend only on the subset of methods they need.",Compose interfaces from smaller embedded interfaces. Use the smallest interface that satisfies the requirement.,Create monolithic interfaces or duplicate method signatures across interfaces.,"package repo
+
+type Reader interface {
+	Get(id string) ([]byte, error)
+}
+
+type Writer interface {
+	Put(id string, data []byte) error
+}
+
+type Deleter interface {
+	Delete(id string) error
+}
+
+type ReadWriter interface {
+	Reader
+	Writer
+}
+
+type Repository interface {
+	Reader
+	Writer
+	Deleter
+}
+
+func BackupData(r Reader, w Writer) error {
+	data, err := r.Get(""backup-key"")
+	if err != nil {
+		return err
+	}
+	return w.Put(""backup-copy"", data)
+}","package repo
+
+// Bad: monolithic interface with no composition
+type Repository interface {
+	Get(id string) ([]byte, error)
+	Put(id string, data []byte) error
+	Delete(id string) error
+	List() ([]string, error)
+	Count() (int, error)
+	Exists(id string) (bool, error)
+}
+
+// Bad: consumer forced to implement all methods
+func BackupData(r Repository) error {
+	data, err := r.Get(""backup-key"")
+	if err != nil {
+		return err
+	}
+	return r.Put(""backup-copy"", data)
+}",High,https://go.dev/doc/effective_go#embedding
+6,Empty Interface (any) - when acceptable,Design,"any, empty interface, type safety","The empty interface (any or interface{}) should be used sparingly. It is acceptable for truly generic operations like encoding/json.Marshal or fmt.Println, but not as a substitute for proper typing.",Use any only when the function truly must handle all types such as serialization or logging. Use generics when possible for type safety.,Use any to avoid designing proper interfaces or types. Do not use any as a lazy parameter type.,"package logger
+
+import (
+	""encoding/json""
+	""fmt""
+	""os""
+)
+
+type Logger struct {
+	out *os.File
+}
+
+func (l *Logger) LogJSON(v any) error {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Errorf(""marshal failed: %w"", err)
+	}
+	_, err = fmt.Fprintf(l.out, ""%s\n"", data)
+	return err
+}
+
+func (l *Logger) Logf(format string, args ...any) {
+	fmt.Fprintf(l.out, format+""\n"", args...)
+}","package calculator
+
+// Bad: using any instead of proper types
+func Add(a any, b any) any {
+	switch va := a.(type) {
+	case int:
+		if vb, ok := b.(int); ok {
+			return va + vb
+		}
+	case float64:
+		if vb, ok := b.(float64); ok {
+			return va + vb
+		}
+	}
+	return nil
+}
+
+func Process(items []any) {
+	for _, item := range items {
+		fmt.Println(item)
+	}
+}",Medium,https://go.dev/doc/effective_go#blank
+7,Type Assertions vs Type Switches,Design,"type assertion, type switch, runtime typing","Use type switches for handling multiple types cleanly. Use single type assertions with the comma-ok idiom to safely check one type. Never use bare type assertions without checking.",Use the comma-ok idiom for single type assertions. Use type switches when checking multiple types. Always handle the default case.,Use bare type assertions without checking which will panic on wrong type. Avoid deeply nested type assertion chains.,"package handler
+
+import ""fmt""
+
+type Dog struct{ Name string }
+type Cat struct{ Name string }
+type Bird struct{ Name string }
+
+func Describe(animal any) string {
+	switch a := animal.(type) {
+	case Dog:
+		return fmt.Sprintf(""Dog named %s"", a.Name)
+	case Cat:
+		return fmt.Sprintf(""Cat named %s"", a.Name)
+	case Bird:
+		return fmt.Sprintf(""Bird named %s"", a.Name)
+	default:
+		return ""unknown animal""
+	}
+}
+
+func TryDog(animal any) (Dog, bool) {
+	d, ok := animal.(Dog)
+	return d, ok
+}","package handler
+
+import ""fmt""
+
+type Dog struct{ Name string }
+type Cat struct{ Name string }
+
+// Bad: bare assertion panics if wrong type
+func Describe(animal any) string {
+	d := animal.(Dog)
+	return fmt.Sprintf(""Dog named %s"", d.Name)
+}
+
+// Bad: nested type assertions are fragile
+func Process(v any) string {
+	if d, ok := v.(Dog); ok {
+		return d.Name
+	} else if c, ok := v.(Cat); ok {
+		return c.Name
+	} else {
+		return fmt.Sprintf(""%v"", v)
+	}
+}",High,https://go.dev/doc/effective_go#type_switch
+8,Implicit Interface Satisfaction,Design,"implicit, duck typing, structural typing","Go interfaces are satisfied implicitly. A type does not declare which interfaces it implements. This allows defining interfaces after the fact and keeps packages decoupled.",Let types satisfy interfaces implicitly. Do not add unnecessary comments listing which interfaces a type implements.,Try to mimic explicit interface declarations from other languages. Do not create registration mechanisms for interface satisfaction.,"package audio
+
+import ""fmt""
+
+type Speaker interface {
+	Speak() string
+}
+
+type Radio struct {
+	Station string
+	Volume  int
+}
+
+// Radio implicitly satisfies Speaker
+func (r *Radio) Speak() string {
+	return fmt.Sprintf(""Playing %s at volume %d"", r.Station, r.Volume)
+}
+
+func Announce(s Speaker) {
+	fmt.Println(s.Speak())
+}
+
+func main() {
+	r := &Radio{Station: ""Jazz FM"", Volume: 7}
+	Announce(r)
+}","package audio
+
+import ""fmt""
+
+type Speaker interface {
+	Speak() string
+}
+
+// Bad: trying to explicitly declare interface impl
+type Radio struct {
+	Station string
+	Volume  int
+}
+
+// Bad: unnecessary and misleading comment
+// implements Speaker interface
+func (r *Radio) Speak() string {
+	return fmt.Sprintf(""Playing %s at volume %d"", r.Station, r.Volume)
+}
+
+// Bad: registering implementations
+var _ Speaker = &Radio{}
+// This specific pattern is actually OK as a compile-time check,
+// but maintaining a registry of implementations is not idiomatic.",Medium,https://go.dev/tour/methods/10
+9,Stringer Interface,Standard Library,"Stringer, fmt, string representation","Implement the fmt.Stringer interface (String() string) to provide a human-readable representation of your types. This is used by fmt.Print, fmt.Sprintf with %v and %s verbs.",Implement String() string on types that benefit from a readable representation. Keep the output concise and informative.,Omit Stringer on types that are frequently printed. Do not include sensitive data in String() output.,"package user
+
+import ""fmt""
+
+type Role int
+
+const (
+	RoleGuest Role = iota
+	RoleUser
+	RoleAdmin
+)
+
+func (r Role) String() string {
+	switch r {
+	case RoleGuest:
+		return ""Guest""
+	case RoleUser:
+		return ""User""
+	case RoleAdmin:
+		return ""Admin""
+	default:
+		return fmt.Sprintf(""Role(%d)"", int(r))
+	}
+}
+
+type Account struct {
+	Name string
+	Role Role
+}
+
+func (a Account) String() string {
+	return fmt.Sprintf(""%s (%s)"", a.Name, a.Role)
+}","package user
+
+import ""fmt""
+
+type Role int
+
+const (
+	RoleGuest Role = iota
+	RoleUser
+	RoleAdmin
+)
+
+// Bad: no Stringer, prints as raw integer
+type Account struct {
+	Name     string
+	Email    string
+	Password string
+	Role     Role
+}
+
+// Bad: exposes sensitive data
+func (a Account) String() string {
+	return fmt.Sprintf(""Account{Name: %s, Email: %s, Password: %s, Role: %d}"",
+		a.Name, a.Email, a.Password, a.Role)
+}",Medium,https://pkg.go.dev/fmt#Stringer
+10,error Interface,Standard Library,"error, interface, custom errors","The error interface is Go's standard mechanism for error handling. Custom error types should implement the error interface and can carry additional context for programmatic error inspection.",Create custom error types that implement the error interface. Use errors.Is and errors.As for inspection. Wrap errors with %w.,Use sentinel string comparisons for error checking. Do not create error types without useful context or methods.,"package apperr
+
+import (
+	""errors""
+	""fmt""
+)
+
+type NotFoundError struct {
+	Resource string
+	ID       string
+}
+
+func (e *NotFoundError) Error() string {
+	return fmt.Sprintf(""%s with ID %s not found"", e.Resource, e.ID)
+}
+
+func FindUser(id string) error {
+	return fmt.Errorf(""database lookup: %w"", &NotFoundError{
+		Resource: ""User"",
+		ID:       id,
+	})
+}
+
+func HandleError(err error) {
+	var nfe *NotFoundError
+	if errors.As(err, &nfe) {
+		fmt.Printf(""Missing %s: %s\n"", nfe.Resource, nfe.ID)
+	}
+}","package apperr
+
+import (
+	""fmt""
+	""strings""
+)
+
+// Bad: using string matching for error handling
+var ErrNotFound = fmt.Errorf(""not found"")
+
+func FindUser(id string) error {
+	return fmt.Errorf(""user %s not found"", id)
+}
+
+func HandleError(err error) {
+	// Bad: fragile string matching
+	if strings.Contains(err.Error(), ""not found"") {
+		fmt.Println(""resource missing"")
+	}
+}",Critical,https://go.dev/blog/error-handling-and-go
+11,sort.Interface Pattern,Standard Library,"sort, Interface, Len, Less, Swap","Implement sort.Interface (Len, Less, Swap) for custom sorting of slices. For simpler cases, use sort.Slice with a closure. The interface pattern is useful for complex or reusable sort orders.",Implement sort.Interface for reusable or complex sorting. Use sort.Slice for one-off simple sorts. Keep Less consistent and transitive.,Re-implement sorting algorithms manually. Do not use unstable comparisons in Less that could cause non-deterministic results.,"package employee
+
+import (
+	""fmt""
+	""sort""
+)
+
+type Employee struct {
+	Name   string
+	Salary float64
+	Age    int
+}
+
+type BySalary []Employee
+
+func (b BySalary) Len() int           { return len(b) }
+func (b BySalary) Less(i, j int) bool { return b[i].Salary < b[j].Salary }
+func (b BySalary) Swap(i, j int)      { b[i], b[j] = b[j], b[i] }
+
+func SortEmployees(employees []Employee) {
+	sort.Sort(BySalary(employees))
+	for _, e := range employees {
+		fmt.Printf(""%s: $%.2f\n"", e.Name, e.Salary)
+	}
+}","package employee
+
+import ""fmt""
+
+type Employee struct {
+	Name   string
+	Salary float64
+	Age    int
+}
+
+// Bad: manual bubble sort instead of sort.Interface
+func SortEmployees(employees []Employee) {
+	n := len(employees)
+	for i := 0; i < n; i++ {
+		for j := 0; j < n-i-1; j++ {
+			if employees[j].Salary > employees[j+1].Salary {
+				employees[j], employees[j+1] = employees[j+1], employees[j]
+			}
+		}
+	}
+	for _, e := range employees {
+		fmt.Printf(""%s: $%.2f\n"", e.Name, e.Salary)
+	}
+}",Medium,https://pkg.go.dev/sort#Interface
+12,http.Handler / http.HandlerFunc,Standard Library,"http, Handler, HandlerFunc, middleware","Use http.Handler and http.HandlerFunc to build composable HTTP middleware and handlers. http.HandlerFunc adapts a function to the http.Handler interface enabling functional handler composition.",Use http.Handler for composable middleware chains. Use http.HandlerFunc to adapt plain functions. Chain middleware by wrapping handlers.,Put all logic in a single large handler function. Do not skip the http.Handler interface for middleware patterns.,"package server
+
+import (
+	""log""
+	""net/http""
+	""time""
+)
+
+func LoggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		next.ServeHTTP(w, r)
+		log.Printf(""%s %s took %v"", r.Method, r.URL.Path, time.Since(start))
+	})
+}
+
+func AuthMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token := r.Header.Get(""Authorization"")
+		if token == """" {
+			http.Error(w, ""unauthorized"", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func HealthHandler(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(""ok""))
+}","package server
+
+import (
+	""log""
+	""net/http""
+	""time""
+)
+
+// Bad: monolithic handler with no middleware composition
+func BigHandler(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	token := r.Header.Get(""Authorization"")
+	if token == """" {
+		http.Error(w, ""unauthorized"", http.StatusUnauthorized)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(""ok""))
+	log.Printf(""%s %s took %v"", r.Method, r.URL.Path, time.Since(start))
+}",High,https://pkg.go.dev/net/http#Handler
+13,fmt.Formatter for Custom Formatting,Standard Library,"fmt, Formatter, Format, custom printing","Implement fmt.Formatter to control how your type is printed with different format verbs. This gives you full control over %v, %s, %q, and custom verbs for your types.",Implement fmt.Formatter when you need different representations for different format verbs. Handle width and precision flags.,Rely solely on Stringer for all formatting needs. Do not ignore the format verb and flags in your Formatter implementation.,"package money
+
+import ""fmt""
+
+type Currency struct {
+	Amount   int64
+	Code     string
+	Decimals int
+}
+
+func (c Currency) Format(f fmt.State, verb rune) {
+	switch verb {
+	case 'v':
+		if f.Flag('+') {
+			fmt.Fprintf(f, ""Currency{Amount: %d, Code: %s, Decimals: %d}"",
+				c.Amount, c.Code, c.Decimals)
+			return
+		}
+		fmt.Fprintf(f, ""%s %.2f"", c.Code, float64(c.Amount)/100.0)
+	case 's':
+		fmt.Fprintf(f, ""%s %.2f"", c.Code, float64(c.Amount)/100.0)
+	case 'q':
+		fmt.Fprintf(f, ""%q"", fmt.Sprintf(""%s %.2f"", c.Code, float64(c.Amount)/100.0))
+	default:
+		fmt.Fprintf(f, ""%%!%c(Currency=%d %s)"", verb, c.Amount, c.Code)
+	}
+}","package money
+
+import ""fmt""
+
+type Currency struct {
+	Amount   int64
+	Code     string
+	Decimals int
+}
+
+// Bad: only Stringer, no verb-specific formatting
+func (c Currency) String() string {
+	return fmt.Sprintf(""%s %d"", c.Code, c.Amount)
+}
+
+// Bad: ignoring format state flags and verbs
+func (c Currency) Format(f fmt.State, verb rune) {
+	fmt.Fprintf(f, ""%s %d"", c.Code, c.Amount)
+}",Low,https://pkg.go.dev/fmt#Formatter
+14,Interface for Testing (DI),Testing,"testing, dependency injection, mock, interface","Define interfaces at the test boundary to enable dependency injection and mocking. This allows replacing real dependencies with test doubles without modifying production code.",Define small interfaces for external dependencies. Inject dependencies via constructor functions. Create simple test doubles that implement the interface.,Depend directly on concrete external clients in your business logic making it impossible to test without real services.,"package order
+
+import ""fmt""
+
+type Pricer interface {
+	GetPrice(sku string) (float64, error)
+}
+
+type OrderCalculator struct {
+	pricer Pricer
+}
+
+func NewOrderCalculator(p Pricer) *OrderCalculator {
+	return &OrderCalculator{pricer: p}
+}
+
+func (o *OrderCalculator) Total(skus []string) (float64, error) {
+	var total float64
+	for _, sku := range skus {
+		price, err := o.pricer.GetPrice(sku)
+		if err != nil {
+			return 0, fmt.Errorf(""price lookup failed for %s: %w"", sku, err)
+		}
+		total += price
+	}
+	return total, nil
+}
+
+// In test file:
+type mockPricer struct {
+	prices map[string]float64
+}
+
+func (m *mockPricer) GetPrice(sku string) (float64, error) {
+	p, ok := m.prices[sku]
+	if !ok {
+		return 0, fmt.Errorf(""not found"")
+	}
+	return p, nil
+}","package order
+
+import ""fmt""
+
+type RealPricingAPI struct {
+	baseURL string
+	apiKey  string
+}
+
+func (r *RealPricingAPI) GetPrice(sku string) (float64, error) {
+	// makes real HTTP call
+	return 9.99, nil
+}
+
+// Bad: directly depends on concrete type, untestable
+type OrderCalculator struct {
+	api *RealPricingAPI
+}
+
+func NewOrderCalculator(url, key string) *OrderCalculator {
+	return &OrderCalculator{
+		api: &RealPricingAPI{baseURL: url, apiKey: key},
+	}
+}
+
+func (o *OrderCalculator) Total(skus []string) (float64, error) {
+	var total float64
+	for _, sku := range skus {
+		price, err := o.api.GetPrice(sku)
+		if err != nil {
+			return 0, fmt.Errorf(""failed: %w"", err)
+		}
+		total += price
+	}
+	return total, nil
+}",Critical,https://go.dev/wiki/CodeReviewComments#interfaces
+15,Don't Export Interfaces for Mocking,Testing,"export, mock, interface, package boundary","Do not export interfaces solely for the purpose of allowing consumers to mock your package. Let consumers define their own interfaces with only the methods they need.",Keep interfaces unexported when they are only used internally. Let consumers define narrow interfaces that match their needs.,Export large interfaces from your library package just so users can mock them in tests.,"package database
+
+// Unexported: consumers define their own interface
+type client struct {
+	dsn string
+}
+
+func NewClient(dsn string) *client {
+	return &client{dsn: dsn}
+}
+
+func (c *client) Query(sql string) ([]map[string]any, error) {
+	// real database query
+	return nil, nil
+}
+
+func (c *client) Exec(sql string) error {
+	// real database exec
+	return nil
+}
+
+// Consumer defines their own interface:
+// type Querier interface {
+//     Query(sql string) ([]map[string]any, error)
+// }","package database
+
+// Bad: exported interface solely for mocking
+type Client interface {
+	Query(sql string) ([]map[string]any, error)
+	Exec(sql string) error
+	Begin() (Tx, error)
+	Close() error
+	Ping() error
+	Stats() Stats
+}
+
+type Tx interface {
+	Commit() error
+	Rollback() error
+	Exec(sql string) error
+	Query(sql string) ([]map[string]any, error)
+}
+
+type Stats struct {
+	OpenConnections int
+}
+
+type realClient struct {
+	dsn string
+}
+
+func NewClient(dsn string) Client {
+	return &realClient{dsn: dsn}
+}",High,https://go.dev/wiki/CodeReviewComments#interfaces
+16,Interface Pollution (too many interfaces),Anti-Pattern,"pollution, over-abstraction, premature","Interface pollution occurs when interfaces are created prematurely or unnecessarily. Interfaces should emerge from a real need for abstraction, not be created upfront for every type.",Create interfaces when you have a concrete need for polymorphism or decoupling. Wait until you have at least two implementations or a testing need.,Create an interface for every struct. Do not define interfaces before you have a concrete use case requiring abstraction.,"package cache
+
+import ""time""
+
+// No interface needed: only one implementation, used directly
+type TTLCache struct {
+	data    map[string]entry
+	ttl     time.Duration
+}
+
+type entry struct {
+	value     string
+	expiresAt time.Time
+}
+
+func NewTTLCache(ttl time.Duration) *TTLCache {
+	return &TTLCache{data: make(map[string]entry), ttl: ttl}
+}
+
+func (c *TTLCache) Set(key, value string) {
+	c.data[key] = entry{value: value, expiresAt: time.Now().Add(c.ttl)}
+}
+
+func (c *TTLCache) Get(key string) (string, bool) {
+	e, ok := c.data[key]
+	if !ok || time.Now().After(e.expiresAt) {
+		return """", false
+	}
+	return e.value, true
+}","package cache
+
+import ""time""
+
+// Bad: premature interface with only one implementation
+type Cache interface {
+	Get(key string) (string, bool)
+	Set(key, value string)
+}
+
+type TTLCache struct {
+	data    map[string]entry
+	ttl     time.Duration
+}
+
+type entry struct {
+	value     string
+	expiresAt time.Time
+}
+
+func NewTTLCache(ttl time.Duration) Cache {
+	return &TTLCache{data: make(map[string]entry), ttl: ttl}
+}
+
+func (c *TTLCache) Set(key, value string) {
+	c.data[key] = entry{value: value, expiresAt: time.Now().Add(c.ttl)}
+}
+
+func (c *TTLCache) Get(key string) (string, bool) {
+	e, ok := c.data[key]
+	if !ok || time.Now().After(e.expiresAt) {
+		return """", false
+	}
+	return e.value, true
+}",High,https://go.dev/wiki/CodeReviewComments#interfaces
+17,encoding.BinaryMarshaler/TextMarshaler,Standard Library,"encoding, marshal, BinaryMarshaler, TextMarshaler","Implement encoding.BinaryMarshaler/BinaryUnmarshaler and encoding.TextMarshaler/TextUnmarshaler to control how your types are serialized. TextMarshaler is used by encoding/json for map keys.",Implement TextMarshaler and TextUnmarshaler for types used as JSON map keys or in text-based formats. Implement BinaryMarshaler for compact binary serialization.,Rely on default serialization when your type needs a specific format. Do not ignore the Unmarshaler counterpart when implementing a Marshaler.,"package geo
+
+import (
+	""fmt""
+	""strconv""
+	""strings""
+)
+
+type Coordinate struct {
+	Lat float64
+	Lon float64
+}
+
+func (c Coordinate) MarshalText() ([]byte, error) {
+	s := fmt.Sprintf(""%.6f,%.6f"", c.Lat, c.Lon)
+	return []byte(s), nil
+}
+
+func (c *Coordinate) UnmarshalText(text []byte) error {
+	parts := strings.SplitN(string(text), "","", 2)
+	if len(parts) != 2 {
+		return fmt.Errorf(""invalid coordinate: %s"", text)
+	}
+	lat, err := strconv.ParseFloat(parts[0], 64)
+	if err != nil {
+		return fmt.Errorf(""invalid latitude: %w"", err)
+	}
+	lon, err := strconv.ParseFloat(parts[1], 64)
+	if err != nil {
+		return fmt.Errorf(""invalid longitude: %w"", err)
+	}
+	c.Lat = lat
+	c.Lon = lon
+	return nil
+}","package geo
+
+import ""fmt""
+
+type Coordinate struct {
+	Lat float64
+	Lon float64
+}
+
+// Bad: only MarshalText, no UnmarshalText
+func (c Coordinate) MarshalText() ([]byte, error) {
+	return []byte(fmt.Sprintf(""%f|%f"", c.Lat, c.Lon)), nil
+}
+
+// Bad: using non-standard delimiter, no round-trip support
+// Consumers cannot unmarshal what was marshaled",Medium,https://pkg.go.dev/encoding#TextMarshaler
+18,Functional Interfaces (single-method to function type),Design,"functional, adapter, single-method, function type","When an interface has a single method, consider using a function type instead. This is the pattern used by http.HandlerFunc. It allows passing simple functions without creating a struct.",Use function types for single-method interfaces when stateless behavior suffices. Provide an adapter type so functions can satisfy the interface.,Force users to create structs for trivial single-method interface implementations. Do not over-complicate simple callback patterns.,"package events
+
+import ""fmt""
+
+type Handler interface {
+	Handle(event string, data []byte)
+}
+
+// HandlerFunc is an adapter allowing use of ordinary functions as Handlers
+type HandlerFunc func(event string, data []byte)
+
+func (f HandlerFunc) Handle(event string, data []byte) {
+	f(event, data)
+}
+
+type EventBus struct {
+	handlers map[string][]Handler
+}
+
+func NewEventBus() *EventBus {
+	return &EventBus{handlers: make(map[string][]Handler)}
+}
+
+func (b *EventBus) On(event string, h Handler) {
+	b.handlers[event] = append(b.handlers[event], h)
+}
+
+func (b *EventBus) Emit(event string, data []byte) {
+	for _, h := range b.handlers[event] {
+		h.Handle(event, data)
+	}
+}
+
+func Example() {
+	bus := NewEventBus()
+	bus.On(""click"", HandlerFunc(func(event string, data []byte) {
+		fmt.Printf(""Received %s: %s\n"", event, data)
+	}))
+	bus.Emit(""click"", []byte(""button1""))
+}","package events
+
+import ""fmt""
+
+type Handler interface {
+	Handle(event string, data []byte)
+}
+
+// Bad: forces users to create a struct for every handler
+type ClickHandler struct{}
+
+func (c *ClickHandler) Handle(event string, data []byte) {
+	fmt.Printf(""Received %s: %s\n"", event, data)
+}
+
+type HoverHandler struct{}
+
+func (h *HoverHandler) Handle(event string, data []byte) {
+	fmt.Printf(""Hover %s: %s\n"", event, data)
+}
+
+type EventBus struct {
+	handlers map[string][]Handler
+}
+
+func NewEventBus() *EventBus {
+	return &EventBus{handlers: make(map[string][]Handler)}
+}
+
+func (b *EventBus) On(event string, h Handler) {
+	b.handlers[event] = append(b.handlers[event], h)
+}",Medium,https://pkg.go.dev/net/http#HandlerFunc
+19,Interface Guards (var _ Interface = (*Struct)(nil)),Design,"compile-time check, interface guard, assertion","Use compile-time interface guards to verify that a type satisfies an interface at compile time. This catches missing methods early and documents the intended interface compliance.",Add compile-time checks using var _ Interface = (*Struct)(nil) to verify interface satisfaction. Place them near the type definition.,Skip compile-time checks and discover missing method implementations only at runtime when a type assertion or function call fails.,"package queue
+
+import ""fmt""
+
+type MessageQueue interface {
+	Publish(topic string, msg []byte) error
+	Subscribe(topic string) (<-chan []byte, error)
+	Close() error
+}
+
+type InMemoryQueue struct {
+	topics map[string]chan []byte
+}
+
+// Compile-time check: InMemoryQueue must satisfy MessageQueue
+var _ MessageQueue = (*InMemoryQueue)(nil)
+
+func NewInMemoryQueue() *InMemoryQueue {
+	return &InMemoryQueue{topics: make(map[string]chan []byte)}
+}
+
+func (q *InMemoryQueue) Publish(topic string, msg []byte) error {
+	ch, ok := q.topics[topic]
+	if !ok {
+		return fmt.Errorf(""topic %s does not exist"", topic)
+	}
+	ch <- msg
+	return nil
+}
+
+func (q *InMemoryQueue) Subscribe(topic string) (<-chan []byte, error) {
+	ch := make(chan []byte, 100)
+	q.topics[topic] = ch
+	return ch, nil
+}
+
+func (q *InMemoryQueue) Close() error {
+	for _, ch := range q.topics {
+		close(ch)
+	}
+	return nil
+}","package queue
+
+import ""fmt""
+
+type MessageQueue interface {
+	Publish(topic string, msg []byte) error
+	Subscribe(topic string) (<-chan []byte, error)
+	Close() error
+}
+
+type InMemoryQueue struct {
+	topics map[string]chan []byte
+}
+
+// Bad: no compile-time check, missing Close method
+// Error only discovered at runtime
+
+func NewInMemoryQueue() *InMemoryQueue {
+	return &InMemoryQueue{topics: make(map[string]chan []byte)}
+}
+
+func (q *InMemoryQueue) Publish(topic string, msg []byte) error {
+	ch, ok := q.topics[topic]
+	if !ok {
+		return fmt.Errorf(""topic %s does not exist"", topic)
+	}
+	ch <- msg
+	return nil
+}
+
+func (q *InMemoryQueue) Subscribe(topic string) (<-chan []byte, error) {
+	ch := make(chan []byte, 100)
+	q.topics[topic] = ch
+	return ch, nil
+}",Medium,https://go.dev/doc/effective_go#blank_implements
+20,context.Context as First Parameter,Standard Library,"context, cancellation, deadline, first parameter","Always pass context.Context as the first parameter to functions that need cancellation, deadlines, or request-scoped values. Never store context in a struct.",Pass context.Context as the first parameter named ctx. Use context.WithTimeout and context.WithCancel for lifecycle management.,Store context.Context in a struct field. Do not pass nil context; use context.TODO() or context.Background() when unsure.,"package fetcher
+
+import (
+	""context""
+	""fmt""
+	""net/http""
+	""time""
+)
+
+type APIClient struct {
+	baseURL    string
+	httpClient *http.Client
+}
+
+func NewAPIClient(baseURL string) *APIClient {
+	return &APIClient{
+		baseURL:    baseURL,
+		httpClient: &http.Client{Timeout: 30 * time.Second},
+	}
+}
+
+func (a *APIClient) GetUser(ctx context.Context, id string) (*http.Response, error) {
+	url := fmt.Sprintf(""%s/users/%s"", a.baseURL, id)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf(""create request: %w"", err)
+	}
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf(""fetch user: %w"", err)
+	}
+	return resp, nil
+}","package fetcher
+
+import (
+	""context""
+	""fmt""
+	""net/http""
+	""time""
+)
+
+// Bad: storing context in a struct
+type APIClient struct {
+	baseURL    string
+	httpClient *http.Client
+	ctx        context.Context
+}
+
+func NewAPIClient(ctx context.Context, baseURL string) *APIClient {
+	return &APIClient{
+		baseURL:    baseURL,
+		httpClient: &http.Client{Timeout: 30 * time.Second},
+		ctx:        ctx,
+	}
+}
+
+// Bad: using stored context instead of per-call context
+func (a *APIClient) GetUser(id string) (*http.Response, error) {
+	url := fmt.Sprintf(""%s/users/%s"", a.baseURL, id)
+	req, err := http.NewRequestWithContext(a.ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf(""create request: %w"", err)
+	}
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf(""fetch user: %w"", err)
+	}
+	return resp, nil
+}",Critical,https://pkg.go.dev/context

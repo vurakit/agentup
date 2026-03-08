@@ -1,0 +1,1118 @@
+No,Category,Guideline,Description,Do,Dont,Code Good,Code Bad,Severity,Docs URL
+1,Cobra Root Command,Use cmd.Execute() as the single entry point,"The root command should call Execute() in main.go and handle the error at the top level, keeping main clean and minimal.",Call rootCmd.Execute() from main and handle errors there,Put business logic directly in main.go or ignore the Execute error,"package main
+
+import (
+	""fmt""
+	""os""
+
+	""github.com/spf13/cobra""
+)
+
+var rootCmd = &cobra.Command{
+	Use:   ""myapp"",
+	Short: ""My CLI application"",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return cmd.Help()
+	},
+}
+
+func main() {
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}","package main
+
+import ""github.com/spf13/cobra""
+
+func main() {
+	rootCmd := &cobra.Command{Use: ""myapp""}
+	rootCmd.Execute()
+}",Critical,https://pkg.go.dev/github.com/spf13/cobra
+2,Subcommands,Organize commands in a tree structure,"Group related functionality into subcommands. Place each command in its own file under a cmd/ package to keep things organized and maintainable.",Create separate files per command and add them with AddCommand,Define all commands in a single file or deeply nest unrelated subcommands,"package cmd
+
+import ""github.com/spf13/cobra""
+
+var serveCmd = &cobra.Command{
+	Use:   ""serve"",
+	Short: ""Start the server"",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		port, _ := cmd.Flags().GetInt(""port"")
+		return startServer(port)
+	},
+}
+
+func init() {
+	rootCmd.AddCommand(serveCmd)
+	serveCmd.Flags().IntP(""port"", ""p"", 8080, ""server port"")
+}","package cmd
+
+import ""github.com/spf13/cobra""
+
+func init() {
+	rootCmd.AddCommand(&cobra.Command{
+		Use: ""serve"",
+		Run: func(cmd *cobra.Command, args []string) {
+			startServer(8080)
+		},
+	})
+}",High,https://pkg.go.dev/github.com/spf13/cobra#Command.AddCommand
+3,Persistent Flags,Use PersistentFlags for flags shared across subcommands,"PersistentFlags are inherited by all child commands. Use Flags() for command-specific flags. This avoids duplication and keeps the flag surface consistent.",Use PersistentFlags on the root for global options like --verbose or --config,Use Flags() on root and then manually duplicate them on each subcommand,"package cmd
+
+import ""github.com/spf13/cobra""
+
+var verbose bool
+
+var rootCmd = &cobra.Command{
+	Use:   ""myapp"",
+	Short: ""My CLI application"",
+}
+
+func init() {
+	rootCmd.PersistentFlags().BoolVarP(&verbose, ""verbose"", ""v"", false, ""enable verbose output"")
+	rootCmd.Flags().String(""local-only"", """", ""only for root"")
+}","package cmd
+
+import ""github.com/spf13/cobra""
+
+var rootCmd = &cobra.Command{Use: ""myapp""}
+var subCmd = &cobra.Command{Use: ""sub""}
+
+func init() {
+	rootCmd.Flags().BoolP(""verbose"", ""v"", false, ""verbose"")
+	subCmd.Flags().BoolP(""verbose"", ""v"", false, ""verbose"")
+}",High,https://pkg.go.dev/github.com/spf13/cobra#Command.PersistentFlags
+4,Required Flags,Mark mandatory flags with MarkFlagRequired,"Use MarkFlagRequired so Cobra validates presence before RunE executes. This gives users clear error messages without manual checking.",Call MarkFlagRequired after defining the flag,Manually check for empty flag values inside RunE,"package cmd
+
+import ""github.com/spf13/cobra""
+
+var deployCmd = &cobra.Command{
+	Use:   ""deploy"",
+	Short: ""Deploy the application"",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		env, _ := cmd.Flags().GetString(""env"")
+		return deploy(env)
+	},
+}
+
+func init() {
+	rootCmd.AddCommand(deployCmd)
+	deployCmd.Flags().StringP(""env"", ""e"", """", ""target environment"")
+	deployCmd.MarkFlagRequired(""env"")
+}","package cmd
+
+import (
+	""errors""
+	""github.com/spf13/cobra""
+)
+
+var deployCmd = &cobra.Command{
+	Use: ""deploy"",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		env, _ := cmd.Flags().GetString(""env"")
+		if env == """" {
+			return errors.New(""env is required"")
+		}
+		return deploy(env)
+	},
+}",Medium,https://pkg.go.dev/github.com/spf13/cobra#Command.MarkFlagRequired
+5,Viper Config Integration,Bind Cobra flags to Viper with BindPFlags,"Binding flags to Viper allows configuration to come from flags, environment variables, or config files with a single unified API.",Call viper.BindPFlags in an init or PersistentPreRun hook,Read flag values with cmd.Flags().GetString when Viper is also in use,"package cmd
+
+import (
+	""github.com/spf13/cobra""
+	""github.com/spf13/viper""
+)
+
+var rootCmd = &cobra.Command{
+	Use: ""myapp"",
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		return viper.BindPFlags(cmd.Flags())
+	},
+	RunE: func(cmd *cobra.Command, args []string) error {
+		addr := viper.GetString(""address"")
+		return serve(addr)
+	},
+}
+
+func init() {
+	rootCmd.Flags().String(""address"", "":8080"", ""listen address"")
+}","package cmd
+
+import (
+	""github.com/spf13/cobra""
+	""github.com/spf13/viper""
+)
+
+var rootCmd = &cobra.Command{
+	Use: ""myapp"",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		addr, _ := cmd.Flags().GetString(""address"")
+		_ = viper.GetString(""address"")
+		return serve(addr)
+	},
+}",High,https://pkg.go.dev/github.com/spf13/viper#BindPFlags
+6,Config File Loading,Load config files with viper.ReadInConfig,"Use Viper to load YAML, TOML, or JSON config files. Set the config name and paths, then call ReadInConfig. Handle the file-not-found case gracefully.",Use viper.ReadInConfig and handle ConfigFileNotFoundError as non-fatal,Call os.ReadFile and manually parse JSON/YAML for configuration,"package cmd
+
+import (
+	""fmt""
+	""os""
+
+	""github.com/spf13/cobra""
+	""github.com/spf13/viper""
+)
+
+func initConfig() {
+	if cfgFile != """" {
+		viper.SetConfigFile(cfgFile)
+	} else {
+		home, _ := os.UserHomeDir()
+		viper.AddConfigPath(home)
+		viper.AddConfigPath(""."")
+		viper.SetConfigName("".myapp"")
+		viper.SetConfigType(""yaml"")
+	}
+	if err := viper.ReadInConfig(); err != nil {
+		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}
+}
+
+var cfgFile string
+
+func init() {
+	cobra.OnInitialize(initConfig)
+	rootCmd.PersistentFlags().StringVar(&cfgFile, ""config"", """", ""config file path"")
+}","package cmd
+
+import (
+	""encoding/json""
+	""os""
+)
+
+type Config struct {
+	Port int `json:""port""`
+}
+
+func loadConfig() Config {
+	data, _ := os.ReadFile(""config.json"")
+	var c Config
+	json.Unmarshal(data, &c)
+	return c
+}",High,https://pkg.go.dev/github.com/spf13/viper#ReadInConfig
+7,Environment Variables,Use viper.AutomaticEnv for environment variable support,"AutomaticEnv tells Viper to check environment variables for every key. Use SetEnvPrefix to namespace your vars and SetEnvKeyReplacer for key format conversion.",Call viper.AutomaticEnv with a prefix and replacer,Read os.Getenv manually for each configuration value,"package cmd
+
+import (
+	""strings""
+
+	""github.com/spf13/cobra""
+	""github.com/spf13/viper""
+)
+
+func initConfig() {
+	viper.SetEnvPrefix(""MYAPP"")
+	viper.SetEnvKeyReplacer(strings.NewReplacer(""-"", ""_"", ""."", ""_""))
+	viper.AutomaticEnv()
+	viper.ReadInConfig()
+}
+
+func init() {
+	cobra.OnInitialize(initConfig)
+}","package cmd
+
+import ""os""
+
+func getDBHost() string {
+	host := os.Getenv(""MYAPP_DB_HOST"")
+	if host == """" {
+		return ""localhost""
+	}
+	return host
+}",Medium,https://pkg.go.dev/github.com/spf13/viper#AutomaticEnv
+8,Shell Completion,Generate shell completion scripts,"Cobra has built-in support for generating bash, zsh, fish, and PowerShell completion scripts. Expose this to users via a completion subcommand.",Use cobra.Command with GenBashCompletionV2 or the built-in completion command,Omit shell completion entirely or write custom completion logic,"package cmd
+
+import (
+	""os""
+
+	""github.com/spf13/cobra""
+)
+
+var completionCmd = &cobra.Command{
+	Use:   ""completion [bash|zsh|fish|powershell]"",
+	Short: ""Generate shell completion script"",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		switch args[0] {
+		case ""bash"":
+			return rootCmd.GenBashCompletionV2(os.Stdout, true)
+		case ""zsh"":
+			return rootCmd.GenZshCompletion(os.Stdout)
+		case ""fish"":
+			return rootCmd.GenFishCompletion(os.Stdout, true)
+		case ""powershell"":
+			return rootCmd.GenPowerShellCompletionWithDesc(os.Stdout)
+		default:
+			return cmd.Help()
+		}
+	},
+}
+
+func init() {
+	rootCmd.AddCommand(completionCmd)
+}","package cmd
+
+import ""fmt""
+
+var completionCmd = &cobra.Command{
+	Use: ""completion"",
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Println(""# source this file for completion"")
+	},
+}",Medium,https://pkg.go.dev/github.com/spf13/cobra#Command.GenBashCompletionV2
+9,Args Validation,Validate argument count with Cobra validators,"Use Cobra's built-in argument validators like ExactArgs, MinimumNArgs, MaximumNArgs, and RangeArgs to enforce correct usage before RunE fires.",Set the Args field on your Command struct,Manually check len(args) inside RunE,"package cmd
+
+import (
+	""fmt""
+
+	""github.com/spf13/cobra""
+)
+
+var greetCmd = &cobra.Command{
+	Use:   ""greet [name]"",
+	Short: ""Greet a user by name"",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		fmt.Fprintf(cmd.OutOrStdout(), ""Hello, %s!\n"", args[0])
+		return nil
+	},
+}
+
+func init() {
+	rootCmd.AddCommand(greetCmd)
+}","package cmd
+
+import (
+	""errors""
+	""fmt""
+
+	""github.com/spf13/cobra""
+)
+
+var greetCmd = &cobra.Command{
+	Use: ""greet [name]"",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if len(args) != 1 {
+			return errors.New(""expected exactly 1 argument"")
+		}
+		fmt.Printf(""Hello, %s!\n"", args[0])
+		return nil
+	},
+}",Medium,https://pkg.go.dev/github.com/spf13/cobra#ExactArgs
+10,PreRun/PostRun,Use lifecycle hooks for setup and teardown,"Cobra provides PersistentPreRun, PreRun, PostRun, and PersistentPostRun hooks. Use them for initialization, validation, and cleanup instead of mixing that logic into Run.",Use PersistentPreRunE for config loading and PreRunE for command-specific validation,Put setup and teardown logic directly inside RunE alongside business logic,"package cmd
+
+import (
+	""fmt""
+
+	""github.com/spf13/cobra""
+	""github.com/spf13/viper""
+)
+
+var migrateCmd = &cobra.Command{
+	Use:   ""migrate"",
+	Short: ""Run database migrations"",
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		return viper.BindPFlags(cmd.Flags())
+	},
+	PreRunE: func(cmd *cobra.Command, args []string) error {
+		dsn := viper.GetString(""dsn"")
+		if dsn == """" {
+			return fmt.Errorf(""--dsn is required"")
+		}
+		return nil
+	},
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runMigrations(viper.GetString(""dsn""))
+	},
+}
+
+func init() {
+	rootCmd.AddCommand(migrateCmd)
+	migrateCmd.Flags().String(""dsn"", """", ""database connection string"")
+}","package cmd
+
+import (
+	""errors""
+
+	""github.com/spf13/cobra""
+)
+
+var migrateCmd = &cobra.Command{
+	Use: ""migrate"",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		dsn, _ := cmd.Flags().GetString(""dsn"")
+		if dsn == """" {
+			return errors.New(""dsn required"")
+		}
+		initLogger()
+		err := runMigrations(dsn)
+		cleanupLogger()
+		return err
+	},
+}",Medium,https://pkg.go.dev/github.com/spf13/cobra#Command
+11,Bubbletea TUI,Use Bubbletea for interactive terminal UIs,"Bubbletea implements the Elm architecture for terminal apps. Define a Model with Init, Update, and View methods. Use tea.NewProgram to run it.",Create a proper Model struct implementing tea.Model and run with tea.NewProgram,Use fmt.Scanln loops for interactive input or mix TUI with raw print statements,"package tui
+
+import (
+	""fmt""
+
+	tea ""github.com/charmbracelet/bubbletea""
+)
+
+type model struct {
+	choices  []string
+	cursor   int
+	selected map[int]struct{}
+}
+
+func NewModel() model {
+	return model{
+		choices:  []string{""Build"", ""Test"", ""Deploy""},
+		selected: make(map[int]struct{}),
+	}
+}
+
+func (m model) Init() tea.Cmd { return nil }
+
+func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case ""q"", ""ctrl+c"":
+			return m, tea.Quit
+		case ""up"", ""k"":
+			if m.cursor > 0 {
+				m.cursor--
+			}
+		case ""down"", ""j"":
+			if m.cursor < len(m.choices)-1 {
+				m.cursor++
+			}
+		case "" "":
+			if _, ok := m.selected[m.cursor]; ok {
+				delete(m.selected, m.cursor)
+			} else {
+				m.selected[m.cursor] = struct{}{}
+			}
+		}
+	}
+	return m, nil
+}
+
+func (m model) View() string {
+	s := ""Select tasks:\n\n""
+	for i, choice := range m.choices {
+		cursor := "" ""
+		if m.cursor == i {
+			cursor = "">""
+		}
+		checked := "" ""
+		if _, ok := m.selected[i]; ok {
+			checked = ""x""
+		}
+		s += fmt.Sprintf(""%s [%s] %s\n"", cursor, checked, choice)
+	}
+	s += ""\nPress q to quit.\n""
+	return s
+}","package main
+
+import (
+	""bufio""
+	""fmt""
+	""os""
+)
+
+func main() {
+	scanner := bufio.NewScanner(os.Stdin)
+	fmt.Print(""Enter choice: "")
+	scanner.Scan()
+	fmt.Println(""You chose:"", scanner.Text())
+}",Medium,https://pkg.go.dev/github.com/charmbracelet/bubbletea
+12,Lipgloss Styling,Use Lipgloss for styled terminal output,"Lipgloss provides a declarative API for styling terminal strings with colors, borders, padding, and alignment. Define styles as variables and reuse them.",Define reusable lipgloss.Style variables and apply them to output strings,Use raw ANSI escape codes or fmt.Sprintf with hardcoded color codes,"package ui
+
+import (
+	""fmt""
+
+	""github.com/charmbracelet/lipgloss""
+)
+
+var (
+	titleStyle = lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color(""#FAFAFA"")).
+		Background(lipgloss.Color(""#7D56F4"")).
+		PaddingLeft(2).
+		PaddingRight(2)
+
+	successStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(""#04B575"")).
+		Bold(true)
+
+	errorStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(""#FF4672"")).
+		Bold(true)
+)
+
+func RenderTitle(title string) string {
+	return titleStyle.Render(title)
+}
+
+func RenderSuccess(msg string) string {
+	return successStyle.Render(fmt.Sprintf(""OK %s"", msg))
+}
+
+func RenderError(msg string) string {
+	return errorStyle.Render(fmt.Sprintf(""ERR %s"", msg))
+}","package main
+
+import ""fmt""
+
+func printError(msg string) {
+	fmt.Printf(""\033[31m%s\033[0m\n"", msg)
+}
+
+func printSuccess(msg string) {
+	fmt.Printf(""\033[32m%s\033[0m\n"", msg)
+}",Medium,https://pkg.go.dev/github.com/charmbracelet/lipgloss
+13,Huh Forms,Use Huh for interactive form input,"Huh provides a declarative API to build multi-step forms with inputs, selects, confirms, and text areas. It integrates with Bubbletea.",Use huh.NewForm with typed field groups for structured input,Use sequential fmt.Scanln calls for multi-field input,"package prompt
+
+import ""github.com/charmbracelet/huh""
+
+type ProjectConfig struct {
+	Name    string
+	Lang    string
+	Confirm bool
+}
+
+func PromptProjectConfig() (*ProjectConfig, error) {
+	var cfg ProjectConfig
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title(""Project name"").
+				Value(&cfg.Name).
+				Validate(func(s string) error {
+					if s == """" {
+						return fmt.Errorf(""name is required"")
+					}
+					return nil
+				}),
+			huh.NewSelect[string]().
+				Title(""Language"").
+				Options(
+					huh.NewOption(""Go"", ""go""),
+					huh.NewOption(""Rust"", ""rust""),
+					huh.NewOption(""Python"", ""python""),
+				).
+				Value(&cfg.Lang),
+			huh.NewConfirm().
+				Title(""Create project?"").
+				Value(&cfg.Confirm),
+		),
+	)
+	if err := form.Run(); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
+}","package main
+
+import (
+	""bufio""
+	""fmt""
+	""os""
+)
+
+func main() {
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Print(""Project name: "")
+	name, _ := reader.ReadString('\n')
+	fmt.Print(""Language: "")
+	lang, _ := reader.ReadString('\n')
+	fmt.Println(name, lang)
+}",Low,https://pkg.go.dev/github.com/charmbracelet/huh
+14,Progress Bars,Show progress indication for long-running operations,"Use charmbracelet/bubbles progress component inside a Bubbletea program for animated progress bars, or use a simple spinner for indeterminate tasks.",Use bubbles/progress or bubbles/spinner within a tea.Program,Print dots or percentage numbers with fmt.Printf in a loop,"package tui
+
+import (
+	""time""
+
+	""github.com/charmbracelet/bubbles/progress""
+	tea ""github.com/charmbracelet/bubbletea""
+)
+
+type tickMsg time.Time
+
+type model struct {
+	progress progress.Model
+	percent  float64
+}
+
+func NewProgress() model {
+	return model{
+		progress: progress.New(progress.WithDefaultGradient()),
+	}
+}
+
+func (m model) Init() tea.Cmd {
+	return tickCmd()
+}
+
+func tickCmd() tea.Cmd {
+	return tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+		return tickMsg(t)
+	})
+}
+
+func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg.(type) {
+	case tickMsg:
+		m.percent += 0.05
+		if m.percent >= 1.0 {
+			m.percent = 1.0
+			return m, tea.Quit
+		}
+		return m, tickCmd()
+	}
+	return m, nil
+}
+
+func (m model) View() string {
+	return m.progress.ViewAs(m.percent) + ""\n""
+}","package main
+
+import (
+	""fmt""
+	""time""
+)
+
+func main() {
+	for i := 0; i <= 100; i += 10 {
+		fmt.Printf(""\rProgress: %d%%"", i)
+		time.Sleep(200 * time.Millisecond)
+	}
+	fmt.Println()
+}",Low,https://pkg.go.dev/github.com/charmbracelet/bubbles/progress
+15,Table Output,Use Lipgloss table for structured terminal output,"Use charmbracelet/lipgloss/table for rendering aligned, styled tables in the terminal. It supports headers, row styling, and border customization.",Use lipgloss table.New with defined columns and rows,Use fmt.Printf with manual spacing or tab characters for alignment,"package ui
+
+import (
+	""fmt""
+
+	""github.com/charmbracelet/lipgloss""
+	""github.com/charmbracelet/lipgloss/table""
+)
+
+func RenderTable(headers []string, rows [][]string) string {
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(""#FAFAFA""))
+	cellStyle := lipgloss.NewStyle().PaddingRight(2)
+
+	t := table.New().
+		Border(lipgloss.NormalBorder()).
+		BorderStyle(lipgloss.NewStyle().Foreground(lipgloss.Color(""#555555""))).
+		Headers(headers...).
+		StyleFunc(func(row, col int) lipgloss.Style {
+			if row == table.HeaderRow {
+				return headerStyle
+			}
+			return cellStyle
+		})
+
+	for _, row := range rows {
+		t.Row(row...)
+	}
+	return fmt.Sprint(t)
+}","package main
+
+import ""fmt""
+
+func printTable(rows [][]string) {
+	for _, row := range rows {
+		fmt.Printf(""%-20s %-10s %-15s\n"", row[0], row[1], row[2])
+	}
+}",Low,https://pkg.go.dev/github.com/charmbracelet/lipgloss/table
+16,Color Output,Use terminal colors wisely with automatic detection,"Respect NO_COLOR and TERM environment variables. Use lipgloss.HasDarkBackground for adaptive themes. Never hardcode ANSI codes.",Use lipgloss with environment-aware color profiles,Hardcode ANSI escape sequences or ignore NO_COLOR,"package ui
+
+import (
+	""os""
+
+	""github.com/charmbracelet/lipgloss""
+)
+
+func ColorEnabled() bool {
+	if os.Getenv(""NO_COLOR"") != """" {
+		return false
+	}
+	return true
+}
+
+func InfoStyle() lipgloss.Style {
+	if !ColorEnabled() {
+		return lipgloss.NewStyle()
+	}
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(""#00BFFF""))
+}
+
+func WarnStyle() lipgloss.Style {
+	if !ColorEnabled() {
+		return lipgloss.NewStyle()
+	}
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(""#FFD700""))
+}","package main
+
+import ""fmt""
+
+func info(msg string) {
+	fmt.Printf(""\033[34m%s\033[0m\n"", msg)
+}
+
+func warn(msg string) {
+	fmt.Printf(""\033[33m%s\033[0m\n"", msg)
+}",Medium,https://no-color.org
+17,Error Exit Codes,Exit with proper codes for different error types,"Use distinct exit codes: 0 for success, 1 for general errors, 2 for usage errors. Let Cobra handle usage errors and use os.Exit in main only.",Return errors from RunE and map them to exit codes in main,Call os.Exit inside RunE or use log.Fatal in command handlers,"package main
+
+import (
+	""errors""
+	""fmt""
+	""os""
+
+	""github.com/spf13/cobra""
+)
+
+var ErrUsage = errors.New(""usage error"")
+
+var rootCmd = &cobra.Command{
+	Use:          ""myapp"",
+	SilenceUsage: true,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return run()
+	},
+}
+
+func main() {
+	if err := rootCmd.Execute(); err != nil {
+		if errors.Is(err, ErrUsage) {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}","package cmd
+
+import (
+	""log""
+
+	""github.com/spf13/cobra""
+)
+
+var rootCmd = &cobra.Command{
+	Use: ""myapp"",
+	Run: func(cmd *cobra.Command, args []string) {
+		if err := run(); err != nil {
+			log.Fatal(err)
+		}
+	},
+}",High,https://pkg.go.dev/github.com/spf13/cobra#Command
+18,Quiet/Verbose Flags,Implement output level control with --quiet and --verbose flags,"Provide --quiet for scripts and --verbose for debugging. Use a shared output helper that respects these flags throughout the application.",Define a logger or writer that checks verbosity level globally via viper,Use if verbose { fmt.Println(...) } scattered throughout the codebase,"package cmd
+
+import (
+	""fmt""
+	""io""
+	""os""
+
+	""github.com/spf13/cobra""
+	""github.com/spf13/viper""
+)
+
+func output() io.Writer {
+	if viper.GetBool(""quiet"") {
+		return io.Discard
+	}
+	return os.Stdout
+}
+
+func debug(format string, a ...any) {
+	if viper.GetBool(""verbose"") {
+		fmt.Fprintf(os.Stderr, ""[DEBUG] ""+format+""\n"", a...)
+	}
+}
+
+func init() {
+	rootCmd.PersistentFlags().BoolP(""verbose"", ""v"", false, ""verbose output"")
+	rootCmd.PersistentFlags().BoolP(""quiet"", ""q"", false, ""suppress output"")
+	rootCmd.MarkFlagsMutuallyExclusive(""verbose"", ""quiet"")
+}","package cmd
+
+import ""fmt""
+
+var verbose bool
+
+func doWork() {
+	if verbose {
+		fmt.Println(""starting work..."")
+	}
+	if verbose {
+		fmt.Println(""step 1 done"")
+	}
+	if verbose {
+		fmt.Println(""step 2 done"")
+	}
+}",Medium,https://pkg.go.dev/github.com/spf13/cobra#Command.MarkFlagsMutuallyExclusive
+19,Version Command,Add a --version flag using Cobra's built-in support,"Set the Version field on the root command. Cobra automatically adds a --version flag and version subcommand. Populate the version at build time with ldflags.",Set rootCmd.Version and use ldflags to inject the value at build time,Hardcode a version string or create a manual version subcommand,"package cmd
+
+import ""github.com/spf13/cobra""
+
+var version = ""dev""
+
+var rootCmd = &cobra.Command{
+	Use:     ""myapp"",
+	Short:   ""My CLI application"",
+	Version: version,
+}
+
+func init() {
+	rootCmd.SetVersionTemplate(""{{.Name}} version {{.Version}}\n"")
+}","package cmd
+
+import (
+	""fmt""
+
+	""github.com/spf13/cobra""
+)
+
+var versionCmd = &cobra.Command{
+	Use: ""version"",
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Println(""v1.2.3"")
+	},
+}
+
+func init() {
+	rootCmd.AddCommand(versionCmd)
+}",Low,https://pkg.go.dev/github.com/spf13/cobra#Command
+20,Man Pages,Generate man pages with cobra/doc,"Use the cobra/doc package to generate man pages, markdown docs, and REST documentation from your command tree automatically.",Use doc.GenManTree or doc.GenMarkdownTree in a separate doc generation command,Write man pages by hand or skip documentation generation entirely,"package cmd
+
+import (
+	""github.com/spf13/cobra""
+	""github.com/spf13/cobra/doc""
+)
+
+var docsCmd = &cobra.Command{
+	Use:    ""docs"",
+	Short:  ""Generate documentation"",
+	Hidden: true,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		outDir, _ := cmd.Flags().GetString(""dir"")
+		format, _ := cmd.Flags().GetString(""format"")
+		switch format {
+		case ""man"":
+			header := &doc.GenManHeader{
+				Title:   ""MYAPP"",
+				Section: ""1"",
+			}
+			return doc.GenManTree(rootCmd, header, outDir)
+		default:
+			return doc.GenMarkdownTree(rootCmd, outDir)
+		}
+	},
+}
+
+func init() {
+	rootCmd.AddCommand(docsCmd)
+	docsCmd.Flags().String(""dir"", ""./docs"", ""output directory"")
+	docsCmd.Flags().String(""format"", ""md"", ""output format (md or man)"")
+}","package main
+
+import (
+	""fmt""
+	""os""
+)
+
+func writeManPage() {
+	f, _ := os.Create(""myapp.1"")
+	defer f.Close()
+	fmt.Fprintln(f, "".TH MYAPP 1"")
+	fmt.Fprintln(f, "".SH NAME"")
+	fmt.Fprintln(f, ""myapp - my application"")
+}",Low,https://pkg.go.dev/github.com/spf13/cobra/doc
+21,Testing CLI Commands,Execute commands in tests using the command's ExecuteC method,"Create commands with captured output buffers. Use cmd.SetOut and cmd.SetErr for testable output. Use ExecuteC to run and inspect results.",Use bytes.Buffer with SetOut/SetErr and call ExecuteC in test functions,Test by running os/exec.Command on the compiled binary,"package cmd
+
+import (
+	""bytes""
+	""testing""
+
+	""github.com/spf13/cobra""
+)
+
+func executeCommand(root *cobra.Command, args ...string) (string, error) {
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs(args)
+	_, err := root.ExecuteC()
+	return buf.String(), err
+}
+
+func TestGreetCommand(t *testing.T) {
+	root := newRootCmd()
+	output, err := executeCommand(root, ""greet"", ""Alice"")
+	if err != nil {
+		t.Fatalf(""unexpected error: %v"", err)
+	}
+	expected := ""Hello, Alice!\n""
+	if output != expected {
+		t.Errorf(""got %q, want %q"", output, expected)
+	}
+}
+
+func TestGreetCommandNoArgs(t *testing.T) {
+	root := newRootCmd()
+	_, err := executeCommand(root, ""greet"")
+	if err == nil {
+		t.Fatal(""expected error for missing args"")
+	}
+}","package cmd
+
+import (
+	""os/exec""
+	""testing""
+)
+
+func TestGreet(t *testing.T) {
+	cmd := exec.Command(""./myapp"", ""greet"", ""Alice"")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != ""Hello, Alice!\n"" {
+		t.Fail()
+	}
+}",High,https://pkg.go.dev/github.com/spf13/cobra#Command.ExecuteC
+22,Stdin/Stdout,Use cmd.InOrStdin and cmd.OutOrStdout for proper I/O,"Cobra commands provide InOrStdin, OutOrStdout, and ErrOrStderr methods. Use them instead of os.Stdin/os.Stdout directly for testability.",Use cmd.OutOrStdout() and cmd.InOrStdin() inside RunE,Use fmt.Println or os.Stdout.Write directly in command handlers,"package cmd
+
+import (
+	""bufio""
+	""fmt""
+	""io""
+
+	""github.com/spf13/cobra""
+)
+
+var catCmd = &cobra.Command{
+	Use:   ""cat"",
+	Short: ""Read from stdin and write to stdout"",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		reader := bufio.NewReader(cmd.InOrStdin())
+		writer := cmd.OutOrStdout()
+		_, err := io.Copy(writer, reader)
+		return err
+	},
+}
+
+var echoCmd = &cobra.Command{
+	Use:   ""echo [message]"",
+	Short: ""Echo a message"",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		fmt.Fprintln(cmd.OutOrStdout(), args[0])
+		return nil
+	},
+}
+
+func init() {
+	rootCmd.AddCommand(catCmd)
+	rootCmd.AddCommand(echoCmd)
+}","package cmd
+
+import (
+	""fmt""
+
+	""github.com/spf13/cobra""
+)
+
+var echoCmd = &cobra.Command{
+	Use: ""echo [message]"",
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Println(args[0])
+	},
+}",Medium,https://pkg.go.dev/github.com/spf13/cobra#Command.OutOrStdout
+23,Signal Handling,Handle OS signals for graceful shutdown,"Use os/signal.NotifyContext to create a context that cancels on SIGINT or SIGTERM. Pass this context to long-running operations for clean shutdown.",Use signal.NotifyContext for context cancellation on interrupt,Ignore signals or use os.Exit(0) inside a signal handler,"package cmd
+
+import (
+	""context""
+	""fmt""
+	""os""
+	""os/signal""
+	""syscall""
+
+	""github.com/spf13/cobra""
+)
+
+var serveCmd = &cobra.Command{
+	Use:   ""serve"",
+	Short: ""Start the server"",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, stop := signal.NotifyContext(
+			context.Background(),
+			os.Interrupt,
+			syscall.SIGTERM,
+		)
+		defer stop()
+
+		fmt.Fprintln(cmd.OutOrStdout(), ""Server starting... Press Ctrl+C to stop."")
+		return runServer(ctx)
+	},
+}
+
+func runServer(ctx context.Context) error {
+	<-ctx.Done()
+	fmt.Println(""Shutting down gracefully..."")
+	return nil
+}
+
+func init() {
+	rootCmd.AddCommand(serveCmd)
+}","package cmd
+
+import (
+	""fmt""
+	""os""
+	""os/signal""
+
+	""github.com/spf13/cobra""
+)
+
+var serveCmd = &cobra.Command{
+	Use: ""serve"",
+	Run: func(cmd *cobra.Command, args []string) {
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, os.Interrupt)
+		go func() {
+			<-c
+			fmt.Println(""bye"")
+			os.Exit(0)
+		}()
+		select {}
+	},
+}",High,https://pkg.go.dev/os/signal#NotifyContext
+24,Config Precedence,Enforce precedence: flags > env > config file > defaults,"Viper automatically handles precedence when configured correctly. Bind flags with BindPFlags and set defaults with SetDefault. The order is flag > env > config > default.",Bind all flags with viper.BindPFlags and set defaults with viper.SetDefault,Manually check each source and write custom precedence logic,"package cmd
+
+import (
+	""fmt""
+	""strings""
+
+	""github.com/spf13/cobra""
+	""github.com/spf13/viper""
+)
+
+func initConfig() {
+	viper.SetDefault(""port"", 8080)
+	viper.SetDefault(""host"", ""localhost"")
+
+	viper.SetConfigName("".myapp"")
+	viper.SetConfigType(""yaml"")
+	viper.AddConfigPath(""."")
+	viper.ReadInConfig()
+
+	viper.SetEnvPrefix(""MYAPP"")
+	viper.SetEnvKeyReplacer(strings.NewReplacer(""-"", ""_""))
+	viper.AutomaticEnv()
+}
+
+var rootCmd = &cobra.Command{
+	Use: ""myapp"",
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		return viper.BindPFlags(cmd.Flags())
+	},
+	RunE: func(cmd *cobra.Command, args []string) error {
+		fmt.Printf(""host=%s port=%d\n"", viper.GetString(""host""), viper.GetInt(""port""))
+		return nil
+	},
+}
+
+func init() {
+	cobra.OnInitialize(initConfig)
+	rootCmd.Flags().String(""host"", """", ""server host"")
+	rootCmd.Flags().Int(""port"", 0, ""server port"")
+}","package cmd
+
+import (
+	""os""
+	""strconv""
+
+	""github.com/spf13/cobra""
+)
+
+var rootCmd = &cobra.Command{
+	Use: ""myapp"",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		port, _ := cmd.Flags().GetInt(""port"")
+		if port == 0 {
+			if p := os.Getenv(""PORT""); p != """" {
+				port, _ = strconv.Atoi(p)
+			}
+		}
+		if port == 0 {
+			port = 8080
+		}
+		return serve(port)
+	},
+}",High,https://pkg.go.dev/github.com/spf13/viper#readme-why-viper
+25,Distribution,Use GoReleaser for cross-platform distribution,"GoReleaser automates building, packaging, and publishing Go binaries. Configure .goreleaser.yaml with ldflags to inject version info at build time.",Configure .goreleaser.yaml with ldflags and use goreleaser release in CI,Build manually with go build for each platform or distribute without checksums,"// .goreleaser.yaml
+// builds:
+//   - env: [CGO_ENABLED=0]
+//     goos: [linux, darwin, windows]
+//     goarch: [amd64, arm64]
+//     ldflags:
+//       - -s -w
+//       - -X main.version={{.Version}}
+//       - -X main.commit={{.Commit}}
+
+package main
+
+import (
+	""fmt""
+	""os""
+
+	""github.com/spf13/cobra""
+)
+
+var (
+	version = ""dev""
+	commit  = ""none""
+)
+
+var rootCmd = &cobra.Command{
+	Use:     ""myapp"",
+	Version: fmt.Sprintf(""%s (commit: %s)"", version, commit),
+}
+
+func main() {
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}","package main
+
+import (
+	""fmt""
+	""os""
+	""os/exec""
+	""runtime""
+)
+
+func build() {
+	targets := []string{""linux"", ""darwin"", ""windows""}
+	for _, t := range targets {
+		cmd := exec.Command(""go"", ""build"", ""-o"", fmt.Sprintf(""myapp-%s-%s"", t, runtime.GOARCH))
+		cmd.Env = append(os.Environ(), ""GOOS=""+t)
+		cmd.Run()
+	}
+}",Medium,https://goreleaser.com/quick-start

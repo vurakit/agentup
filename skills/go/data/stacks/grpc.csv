@@ -1,0 +1,1320 @@
+No,Category,Guideline,Description,Do,Dont,Code Good,Code Bad,Severity,Docs URL
+1,Protobuf Definition,Define services and messages in .proto files,"Use proto3 syntax with well-structured message types and service definitions. Keep messages small, use appropriate field types, and follow the Protobuf style guide.",Use proto3 with proper package names and go_package options,Mix proto2 and proto3 or use generic field names like data or value,"// user.proto
+syntax = ""proto3"";
+
+package user.v1;
+
+option go_package = ""github.com/myapp/gen/user/v1;userv1"";
+
+message CreateUserRequest {
+  string email = 1;
+  string display_name = 2;
+}
+
+message CreateUserResponse {
+  string user_id = 1;
+}
+
+service UserService {
+  rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
+  rpc GetUser(GetUserRequest) returns (GetUserResponse);
+}
+
+message GetUserRequest {
+  string user_id = 1;
+}
+
+message GetUserResponse {
+  string user_id = 1;
+  string email = 2;
+  string display_name = 3;
+}","// user.proto
+syntax = ""proto3"";
+
+message Request {
+  string data = 1;
+}
+
+message Response {
+  string data = 1;
+}
+
+service Service {
+  rpc Do(Request) returns (Response);
+}",Critical,https://protobuf.dev/programming-guides/style
+2,Code Generation,Use protoc-gen-go-grpc for Go code generation,"Install protoc-gen-go and protoc-gen-go-grpc. Use buf or protoc to generate Go code from your .proto files into a dedicated gen/ directory.",Use buf generate or protoc with --go_out and --go-grpc_out flags,Manually write gRPC client/server stubs or commit generated code without regeneration,"// buf.gen.yaml
+// version: v2
+// plugins:
+//   - remote: buf.build/protocolbuffers/go
+//     out: gen
+//     opt: paths=source_relative
+//   - remote: buf.build/grpc/go
+//     out: gen
+//     opt: paths=source_relative
+
+// Generate with: buf generate
+
+// Then use the generated code:
+package main
+
+import (
+	userv1 ""github.com/myapp/gen/user/v1""
+)
+
+var _ userv1.UserServiceServer = (*userServer)(nil)
+
+type userServer struct {
+	userv1.UnimplementedUserServiceServer
+}","// Manually writing stubs
+package main
+
+type UserServiceServer interface {
+	CreateUser(ctx context.Context, req *CreateUserRequest) (*CreateUserResponse, error)
+}",Critical,https://grpc.io/docs/languages/go/quickstart
+3,Server Setup,Create gRPC servers with grpc.NewServer and proper options,"Use grpc.NewServer with ServerOption slice for interceptors, keepalive, and credentials. Register services and serve on a net.Listener.",Use grpc.NewServer with options and register services before calling Serve,Call grpc.NewServer with no options or start serving before registering all services,"package main
+
+import (
+	""log""
+	""net""
+
+	""google.golang.org/grpc""
+	""google.golang.org/grpc/reflection""
+
+	userv1 ""github.com/myapp/gen/user/v1""
+)
+
+func main() {
+	lis, err := net.Listen(""tcp"", "":50051"")
+	if err != nil {
+		log.Fatalf(""failed to listen: %v"", err)
+	}
+
+	opts := []grpc.ServerOption{
+		grpc.MaxRecvMsgSize(4 * 1024 * 1024),
+	}
+
+	srv := grpc.NewServer(opts...)
+	userv1.RegisterUserServiceServer(srv, &userServer{})
+	reflection.Register(srv)
+
+	log.Println(""gRPC server listening on :50051"")
+	if err := srv.Serve(lis); err != nil {
+		log.Fatalf(""failed to serve: %v"", err)
+	}
+}","package main
+
+import (
+	""log""
+	""net""
+
+	""google.golang.org/grpc""
+
+	userv1 ""github.com/myapp/gen/user/v1""
+)
+
+func main() {
+	srv := grpc.NewServer()
+	go srv.Serve(mustListen())
+	userv1.RegisterUserServiceServer(srv, &userServer{})
+}
+
+func mustListen() net.Listener {
+	lis, _ := net.Listen(""tcp"", "":50051"")
+	return lis
+}",Critical,https://pkg.go.dev/google.golang.org/grpc#NewServer
+4,Client Connection,Use grpc.NewClient for client connections,"Use grpc.NewClient (preferred over the deprecated grpc.Dial) with appropriate DialOptions including transport credentials, interceptors, and service config.",Use grpc.NewClient with credentials and proper cleanup via conn.Close,Use grpc.Dial without TLS or forget to close the connection,"package client
+
+import (
+	""context""
+	""log""
+	""time""
+
+	""google.golang.org/grpc""
+	""google.golang.org/grpc/credentials/insecure""
+
+	userv1 ""github.com/myapp/gen/user/v1""
+)
+
+func NewUserClient(addr string) (userv1.UserServiceClient, func(), error) {
+	conn, err := grpc.NewClient(
+		addr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	client := userv1.NewUserServiceClient(conn)
+	cleanup := func() { conn.Close() }
+
+	return client, cleanup, nil
+}
+
+func CreateUser(ctx context.Context, client userv1.UserServiceClient) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	resp, err := client.CreateUser(ctx, &userv1.CreateUserRequest{
+		Email:       ""alice@example.com"",
+		DisplayName: ""Alice"",
+	})
+	if err != nil {
+		log.Fatalf(""CreateUser failed: %v"", err)
+	}
+	log.Printf(""Created user: %s"", resp.GetUserId())
+}","package main
+
+import (
+	""log""
+
+	""google.golang.org/grpc""
+
+	userv1 ""github.com/myapp/gen/user/v1""
+)
+
+func main() {
+	conn, _ := grpc.Dial(""localhost:50051"", grpc.WithInsecure())
+	client := userv1.NewUserServiceClient(conn)
+	_ = client
+	log.Println(""connected"")
+}",Critical,https://pkg.go.dev/google.golang.org/grpc#NewClient
+5,Unary Interceptors,Use server-side unary interceptors for cross-cutting concerns,"Unary interceptors wrap individual RPC calls. Use them for logging, metrics, auth, and error handling. Chain multiple interceptors with grpc.ChainUnaryInterceptor.",Use grpc.ChainUnaryInterceptor to compose multiple interceptors,Put cross-cutting logic like logging or auth inside each service method,"package interceptor
+
+import (
+	""context""
+	""log""
+	""time""
+
+	""google.golang.org/grpc""
+)
+
+func LoggingUnaryInterceptor(
+	ctx context.Context,
+	req any,
+	info *grpc.UnaryServerInfo,
+	handler grpc.UnaryHandler,
+) (any, error) {
+	start := time.Now()
+	resp, err := handler(ctx, req)
+	log.Printf(""method=%s duration=%s error=%v"",
+		info.FullMethod,
+		time.Since(start),
+		err,
+	)
+	return resp, err
+}
+
+func RecoveryUnaryInterceptor(
+	ctx context.Context,
+	req any,
+	info *grpc.UnaryServerInfo,
+	handler grpc.UnaryHandler,
+) (resp any, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf(""panic recovered: %v"", r)
+			err = status.Errorf(codes.Internal, ""internal error"")
+		}
+	}()
+	return handler(ctx, req)
+}
+
+// Usage:
+// srv := grpc.NewServer(
+//   grpc.ChainUnaryInterceptor(
+//     LoggingUnaryInterceptor,
+//     RecoveryUnaryInterceptor,
+//   ),
+// )","package server
+
+import (
+	""context""
+	""log""
+	""time""
+
+	userv1 ""github.com/myapp/gen/user/v1""
+)
+
+type userServer struct {
+	userv1.UnimplementedUserServiceServer
+}
+
+func (s *userServer) CreateUser(ctx context.Context, req *userv1.CreateUserRequest) (*userv1.CreateUserResponse, error) {
+	start := time.Now()
+	log.Printf(""CreateUser called"")
+	resp := &userv1.CreateUserResponse{UserId: ""123""}
+	log.Printf(""CreateUser took %s"", time.Since(start))
+	return resp, nil
+}",High,https://pkg.go.dev/google.golang.org/grpc#ChainUnaryInterceptor
+6,Stream Interceptors,Use server-side stream interceptors for streaming RPCs,"Stream interceptors wrap streaming RPC calls. They receive the stream and can intercept SendMsg and RecvMsg. Use grpc.ChainStreamInterceptor to compose them.",Use grpc.ChainStreamInterceptor for composing stream middleware,Skip stream interceptors and only use unary interceptors,"package interceptor
+
+import (
+	""log""
+	""time""
+
+	""google.golang.org/grpc""
+)
+
+func LoggingStreamInterceptor(
+	srv any,
+	ss grpc.ServerStream,
+	info *grpc.StreamServerInfo,
+	handler grpc.StreamHandler,
+) error {
+	start := time.Now()
+	log.Printf(""stream started: %s"", info.FullMethod)
+	err := handler(srv, ss)
+	log.Printf(""stream ended: %s duration=%s error=%v"",
+		info.FullMethod,
+		time.Since(start),
+		err,
+	)
+	return err
+}
+
+// Usage:
+// srv := grpc.NewServer(
+//   grpc.ChainStreamInterceptor(
+//     LoggingStreamInterceptor,
+//   ),
+// )","package main
+
+import ""google.golang.org/grpc""
+
+func main() {
+	srv := grpc.NewServer()
+	_ = srv
+}",High,https://pkg.go.dev/google.golang.org/grpc#ChainStreamInterceptor
+7,Client Interceptors,Use client-side interceptors for outgoing RPC calls,"Client interceptors wrap outgoing calls. Use them to inject auth tokens, add tracing headers, or implement retry logic on the client side.",Use grpc.WithChainUnaryInterceptor and grpc.WithChainStreamInterceptor as DialOptions,Add auth headers manually in every client call site,"package interceptor
+
+import (
+	""context""
+	""log""
+	""time""
+
+	""google.golang.org/grpc""
+)
+
+func ClientLoggingInterceptor(
+	ctx context.Context,
+	method string,
+	req any,
+	reply any,
+	cc *grpc.ClientConn,
+	invoker grpc.UnaryInvoker,
+	opts ...grpc.CallOption,
+) error {
+	start := time.Now()
+	err := invoker(ctx, method, req, reply, cc, opts...)
+	log.Printf(""client call method=%s duration=%s error=%v"",
+		method,
+		time.Since(start),
+		err,
+	)
+	return err
+}
+
+// Usage:
+// conn, err := grpc.NewClient(
+//   addr,
+//   grpc.WithTransportCredentials(insecure.NewCredentials()),
+//   grpc.WithChainUnaryInterceptor(ClientLoggingInterceptor),
+// )","package main
+
+import (
+	""context""
+	""log""
+	""time""
+
+	""google.golang.org/grpc/metadata""
+	userv1 ""github.com/myapp/gen/user/v1""
+)
+
+func callCreateUser(client userv1.UserServiceClient) {
+	start := time.Now()
+	ctx := metadata.AppendToOutgoingContext(context.Background(), ""x-request-id"", ""123"")
+	resp, err := client.CreateUser(ctx, &userv1.CreateUserRequest{})
+	log.Printf(""took %s err=%v resp=%v"", time.Since(start), err, resp)
+}",High,https://pkg.go.dev/google.golang.org/grpc#WithChainUnaryInterceptor
+8,Error Codes,Use status.Errorf with proper gRPC codes,"Return gRPC status errors with appropriate codes like NotFound, InvalidArgument, Internal. Clients can extract the code and message with status.FromError.",Use status.Errorf with codes from google.golang.org/grpc/codes,Return plain Go errors or use codes.Unknown for all errors,"package server
+
+import (
+	""context""
+
+	""google.golang.org/grpc/codes""
+	""google.golang.org/grpc/status""
+
+	userv1 ""github.com/myapp/gen/user/v1""
+)
+
+type userServer struct {
+	userv1.UnimplementedUserServiceServer
+}
+
+func (s *userServer) GetUser(ctx context.Context, req *userv1.GetUserRequest) (*userv1.GetUserResponse, error) {
+	if req.GetUserId() == """" {
+		return nil, status.Errorf(codes.InvalidArgument, ""user_id is required"")
+	}
+
+	user, err := s.repo.FindByID(ctx, req.GetUserId())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, ""failed to query user: %v"", err)
+	}
+	if user == nil {
+		return nil, status.Errorf(codes.NotFound, ""user %s not found"", req.GetUserId())
+	}
+
+	return &userv1.GetUserResponse{
+		UserId:      user.ID,
+		Email:       user.Email,
+		DisplayName: user.DisplayName,
+	}, nil
+}","package server
+
+import (
+	""context""
+	""errors""
+
+	userv1 ""github.com/myapp/gen/user/v1""
+)
+
+func (s *userServer) GetUser(ctx context.Context, req *userv1.GetUserRequest) (*userv1.GetUserResponse, error) {
+	user, err := s.repo.FindByID(ctx, req.GetUserId())
+	if err != nil {
+		return nil, errors.New(""user not found"")
+	}
+	return &userv1.GetUserResponse{UserId: user.ID}, nil
+}",Critical,https://pkg.go.dev/google.golang.org/grpc/status
+9,Metadata Propagation,Use gRPC metadata for request-scoped key-value pairs,"Metadata is the gRPC equivalent of HTTP headers. Use it for request IDs, auth tokens, and tracing context. Propagate metadata between services.",Use metadata.FromIncomingContext to read and metadata.AppendToOutgoingContext to propagate,Pass request-scoped values as RPC fields or use context.WithValue for gRPC metadata,"package interceptor
+
+import (
+	""context""
+
+	""github.com/google/uuid""
+	""google.golang.org/grpc""
+	""google.golang.org/grpc/metadata""
+)
+
+func RequestIDUnaryInterceptor(
+	ctx context.Context,
+	req any,
+	info *grpc.UnaryServerInfo,
+	handler grpc.UnaryHandler,
+) (any, error) {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		md = metadata.New(nil)
+	}
+
+	requestIDs := md.Get(""x-request-id"")
+	var requestID string
+	if len(requestIDs) > 0 {
+		requestID = requestIDs[0]
+	} else {
+		requestID = uuid.New().String()
+	}
+
+	ctx = metadata.AppendToOutgoingContext(ctx, ""x-request-id"", requestID)
+	grpc.SetHeader(ctx, metadata.Pairs(""x-request-id"", requestID))
+	return handler(ctx, req)
+}","package server
+
+import (
+	""context""
+
+	userv1 ""github.com/myapp/gen/user/v1""
+)
+
+func (s *userServer) GetUser(ctx context.Context, req *userv1.GetUserRequest) (*userv1.GetUserResponse, error) {
+	requestID := ctx.Value(""request-id"").(string)
+	_ = requestID
+	return &userv1.GetUserResponse{}, nil
+}",High,https://pkg.go.dev/google.golang.org/grpc/metadata
+10,Deadline Propagation,Always set deadlines on client RPCs and propagate them,"Set context deadlines on every outgoing RPC call. The server should check context.Err() for cancellation. Deadlines propagate automatically through gRPC.",Use context.WithTimeout for every outgoing call and check ctx.Err() on the server,Make RPC calls without deadlines or ignore context cancellation on the server,"package client
+
+import (
+	""context""
+	""log""
+	""time""
+
+	userv1 ""github.com/myapp/gen/user/v1""
+)
+
+func GetUser(ctx context.Context, client userv1.UserServiceClient, userID string) (*userv1.GetUserResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	return client.GetUser(ctx, &userv1.GetUserRequest{UserId: userID})
+}
+
+// Server side: respect deadline
+func (s *userServer) GetUser(ctx context.Context, req *userv1.GetUserRequest) (*userv1.GetUserResponse, error) {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
+	user, err := s.repo.FindByID(ctx, req.GetUserId())
+	if err != nil {
+		return nil, err
+	}
+
+	return &userv1.GetUserResponse{
+		UserId: user.ID,
+		Email:  user.Email,
+	}, nil
+}","package client
+
+import (
+	""context""
+	""log""
+
+	userv1 ""github.com/myapp/gen/user/v1""
+)
+
+func GetUser(client userv1.UserServiceClient, userID string) {
+	resp, err := client.GetUser(context.Background(), &userv1.GetUserRequest{UserId: userID})
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Println(resp)
+}",Critical,https://grpc.io/docs/guides/deadlines
+11,Health Checking,Implement gRPC health checking protocol,"Use google.golang.org/grpc/health to register the standard health service. This enables load balancers and orchestrators like Kubernetes to check service readiness.",Register grpc health server and update status for each service,Skip health checks or implement a custom /healthz HTTP endpoint alongside gRPC,"package main
+
+import (
+	""log""
+	""net""
+
+	""google.golang.org/grpc""
+	""google.golang.org/grpc/health""
+	healthpb ""google.golang.org/grpc/health/grpc_health_v1""
+
+	userv1 ""github.com/myapp/gen/user/v1""
+)
+
+func main() {
+	lis, err := net.Listen(""tcp"", "":50051"")
+	if err != nil {
+		log.Fatalf(""failed to listen: %v"", err)
+	}
+
+	srv := grpc.NewServer()
+
+	healthServer := health.NewServer()
+	healthpb.RegisterHealthServer(srv, healthServer)
+
+	userv1.RegisterUserServiceServer(srv, &userServer{})
+
+	healthServer.SetServingStatus(
+		""user.v1.UserService"",
+		healthpb.HealthCheckResponse_SERVING,
+	)
+
+	log.Println(""serving on :50051"")
+	if err := srv.Serve(lis); err != nil {
+		log.Fatalf(""failed to serve: %v"", err)
+	}
+}","package main
+
+import (
+	""fmt""
+	""net/http""
+)
+
+func main() {
+	http.HandleFunc(""/healthz"", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, ""ok"")
+	})
+	go http.ListenAndServe("":8081"", nil)
+	// start grpc server separately
+}",High,https://pkg.go.dev/google.golang.org/grpc/health
+12,Reflection,Enable gRPC reflection for development,"Reflection allows tools like grpcurl and grpcui to discover services at runtime. Enable it in development but consider disabling it in production.",Register reflection conditionally based on environment,Enable reflection unconditionally in production or never enable it at all,"package main
+
+import (
+	""log""
+	""net""
+	""os""
+
+	""google.golang.org/grpc""
+	""google.golang.org/grpc/reflection""
+
+	userv1 ""github.com/myapp/gen/user/v1""
+)
+
+func main() {
+	lis, err := net.Listen(""tcp"", "":50051"")
+	if err != nil {
+		log.Fatalf(""failed to listen: %v"", err)
+	}
+
+	srv := grpc.NewServer()
+	userv1.RegisterUserServiceServer(srv, &userServer{})
+
+	if os.Getenv(""ENV"") != ""production"" {
+		reflection.Register(srv)
+		log.Println(""gRPC reflection enabled"")
+	}
+
+	if err := srv.Serve(lis); err != nil {
+		log.Fatalf(""failed to serve: %v"", err)
+	}
+}","package main
+
+import (
+	""log""
+	""net""
+
+	""google.golang.org/grpc""
+	""google.golang.org/grpc/reflection""
+)
+
+func main() {
+	srv := grpc.NewServer()
+	reflection.Register(srv)
+	lis, _ := net.Listen(""tcp"", "":50051"")
+	log.Fatal(srv.Serve(lis))
+}",Medium,https://pkg.go.dev/google.golang.org/grpc/reflection
+13,TLS Setup,Configure TLS credentials for secure gRPC connections,"Use credentials.NewServerTLSFromFile on the server and credentials.NewClientTLSFromFile or credentials.NewTLS on the client for encrypted transport.",Use tls.LoadX509KeyPair for the server and proper TLS config for the client,Use grpc.WithInsecure() or insecure.NewCredentials() in production,"package main
+
+import (
+	""crypto/tls""
+	""log""
+	""net""
+
+	""google.golang.org/grpc""
+	""google.golang.org/grpc/credentials""
+
+	userv1 ""github.com/myapp/gen/user/v1""
+)
+
+func main() {
+	cert, err := tls.LoadX509KeyPair(""server.crt"", ""server.key"")
+	if err != nil {
+		log.Fatalf(""failed to load TLS keys: %v"", err)
+	}
+
+	creds := credentials.NewTLS(&tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS13,
+	})
+
+	srv := grpc.NewServer(grpc.Creds(creds))
+	userv1.RegisterUserServiceServer(srv, &userServer{})
+
+	lis, err := net.Listen(""tcp"", "":50051"")
+	if err != nil {
+		log.Fatalf(""failed to listen: %v"", err)
+	}
+
+	log.Println(""gRPC server with TLS on :50051"")
+	if err := srv.Serve(lis); err != nil {
+		log.Fatalf(""failed to serve: %v"", err)
+	}
+}","package main
+
+import (
+	""log""
+	""net""
+
+	""google.golang.org/grpc""
+)
+
+func main() {
+	srv := grpc.NewServer()
+	lis, _ := net.Listen(""tcp"", "":50051"")
+	log.Fatal(srv.Serve(lis))
+}",Critical,https://pkg.go.dev/google.golang.org/grpc/credentials
+14,Retry Policy,Configure retry policy via gRPC service config,"Use the gRPC service config JSON to define retry policies including max attempts, backoff, and retryable status codes. Apply it as a default service config.",Set service config JSON with retryPolicy on grpc.NewClient,Implement manual retry loops around every RPC call,"package client
+
+import (
+	""google.golang.org/grpc""
+	""google.golang.org/grpc/credentials/insecure""
+
+	userv1 ""github.com/myapp/gen/user/v1""
+)
+
+const retryPolicy = `{
+	""methodConfig"": [{
+		""name"": [{""service"": ""user.v1.UserService""}],
+		""waitForReady"": true,
+		""retryPolicy"": {
+			""MaxAttempts"": 3,
+			""InitialBackoff"": ""0.1s"",
+			""MaxBackoff"": ""1s"",
+			""BackoffMultiplier"": 2.0,
+			""RetryableStatusCodes"": [""UNAVAILABLE"", ""RESOURCE_EXHAUSTED""]
+		}
+	}]
+}`
+
+func NewUserClient(addr string) (userv1.UserServiceClient, func(), error) {
+	conn, err := grpc.NewClient(
+		addr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultServiceConfig(retryPolicy),
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	client := userv1.NewUserServiceClient(conn)
+	return client, func() { conn.Close() }, nil
+}","package client
+
+import (
+	""context""
+	""time""
+
+	userv1 ""github.com/myapp/gen/user/v1""
+)
+
+func GetUserWithRetry(client userv1.UserServiceClient, req *userv1.GetUserRequest) (*userv1.GetUserResponse, error) {
+	var resp *userv1.GetUserResponse
+	var err error
+	for i := 0; i < 3; i++ {
+		resp, err = client.GetUser(context.Background(), req)
+		if err == nil {
+			return resp, nil
+		}
+		time.Sleep(time.Duration(i+1) * 100 * time.Millisecond)
+	}
+	return nil, err
+}",High,https://grpc.io/docs/guides/retry
+15,Load Balancing,Configure client-side load balancing with gRPC,"Use gRPC's built-in round_robin or pick_first load balancing policies. Set the load balancing config via service config and use a resolver for service discovery.",Set the loadBalancingConfig in the service config JSON,Connect to a single address without load balancing or use an external LB for all traffic,"package client
+
+import (
+	""google.golang.org/grpc""
+	""google.golang.org/grpc/credentials/insecure""
+
+	userv1 ""github.com/myapp/gen/user/v1""
+)
+
+const serviceConfig = `{
+	""loadBalancingConfig"": [{""round_robin"": {}}]
+}`
+
+func NewUserClient(target string) (userv1.UserServiceClient, func(), error) {
+	conn, err := grpc.NewClient(
+		target,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultServiceConfig(serviceConfig),
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	client := userv1.NewUserServiceClient(conn)
+	return client, func() { conn.Close() }, nil
+}
+
+// Usage with DNS resolver:
+// client, cleanup, err := NewUserClient(""dns:///myservice.default.svc.cluster.local:50051"")","package client
+
+import (
+	""google.golang.org/grpc""
+	""google.golang.org/grpc/credentials/insecure""
+)
+
+func connect() *grpc.ClientConn {
+	conn, _ := grpc.NewClient(
+		""localhost:50051"",
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	return conn
+}",Medium,https://grpc.io/docs/guides/custom-load-balancing
+16,Keepalive,Configure keepalive parameters for long-lived connections,"Set keepalive parameters on both server and client to detect dead connections and prevent idle connection closure by intermediate proxies.",Configure keepalive.ServerParameters and keepalive.ClientParameters,Use default keepalive settings or disable keepalive entirely,"package main
+
+import (
+	""log""
+	""net""
+	""time""
+
+	""google.golang.org/grpc""
+	""google.golang.org/grpc/keepalive""
+
+	userv1 ""github.com/myapp/gen/user/v1""
+)
+
+func main() {
+	lis, err := net.Listen(""tcp"", "":50051"")
+	if err != nil {
+		log.Fatalf(""failed to listen: %v"", err)
+	}
+
+	srv := grpc.NewServer(
+		grpc.KeepaliveParams(keepalive.ServerParameters{
+			MaxConnectionIdle:     5 * time.Minute,
+			MaxConnectionAge:      30 * time.Minute,
+			MaxConnectionAgeGrace: 10 * time.Second,
+			Time:                  2 * time.Minute,
+			Timeout:               20 * time.Second,
+		}),
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime:             30 * time.Second,
+			PermitWithoutStream: true,
+		}),
+	)
+
+	userv1.RegisterUserServiceServer(srv, &userServer{})
+	log.Fatal(srv.Serve(lis))
+}","package main
+
+import (
+	""log""
+	""net""
+
+	""google.golang.org/grpc""
+)
+
+func main() {
+	srv := grpc.NewServer()
+	lis, _ := net.Listen(""tcp"", "":50051"")
+	log.Fatal(srv.Serve(lis))
+}",High,https://pkg.go.dev/google.golang.org/grpc/keepalive
+17,Compression,Enable gzip compression for large payloads,"Use gRPC's built-in gzip compression for large payloads. Register the compressor and set it per-call or as a default on the client side.",Use grpc.UseCompressor or encoding.RegisterCompressor for gzip,Manually compress/decompress payloads in application code,"package client
+
+import (
+	""context""
+	""time""
+
+	""google.golang.org/grpc""
+	_ ""google.golang.org/grpc/encoding/gzip""
+	""google.golang.org/grpc/credentials/insecure""
+
+	userv1 ""github.com/myapp/gen/user/v1""
+)
+
+func NewCompressedClient(addr string) (userv1.UserServiceClient, func(), error) {
+	conn, err := grpc.NewClient(
+		addr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultCallOptions(grpc.UseCompressor(""gzip"")),
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	client := userv1.NewUserServiceClient(conn)
+	return client, func() { conn.Close() }, nil
+}
+
+// Or per-call:
+func GetUserCompressed(ctx context.Context, client userv1.UserServiceClient, userID string) (*userv1.GetUserResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	return client.GetUser(ctx, &userv1.GetUserRequest{UserId: userID}, grpc.UseCompressor(""gzip""))
+}","package client
+
+import (
+	""bytes""
+	""compress/gzip""
+	""context""
+
+	userv1 ""github.com/myapp/gen/user/v1""
+)
+
+func compressRequest(data []byte) []byte {
+	var buf bytes.Buffer
+	w := gzip.NewWriter(&buf)
+	w.Write(data)
+	w.Close()
+	return buf.Bytes()
+}",Medium,https://pkg.go.dev/google.golang.org/grpc/encoding/gzip
+18,Gateway,Use grpc-gateway for REST/JSON to gRPC transcoding,"grpc-gateway generates a reverse proxy that translates RESTful HTTP/JSON into gRPC. Annotate your .proto files with google.api.http options.",Define HTTP annotations in proto files and use grpc-gateway's generated handler,Write separate REST handlers that duplicate gRPC service logic,"// In .proto file:
+// import ""google/api/annotations.proto"";
+// service UserService {
+//   rpc GetUser(GetUserRequest) returns (GetUserResponse) {
+//     option (google.api.http) = {
+//       get: ""/v1/users/{user_id}""
+//     };
+//   }
+// }
+
+package main
+
+import (
+	""context""
+	""log""
+	""net""
+	""net/http""
+
+	""github.com/grpc-ecosystem/grpc-gateway/v2/runtime""
+	""google.golang.org/grpc""
+	""google.golang.org/grpc/credentials/insecure""
+
+	userv1 ""github.com/myapp/gen/user/v1""
+)
+
+func main() {
+	ctx := context.Background()
+
+	go func() {
+		lis, _ := net.Listen(""tcp"", "":50051"")
+		srv := grpc.NewServer()
+		userv1.RegisterUserServiceServer(srv, &userServer{})
+		log.Fatal(srv.Serve(lis))
+	}()
+
+	mux := runtime.NewServeMux()
+	opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+	err := userv1.RegisterUserServiceHandlerFromEndpoint(ctx, mux, ""localhost:50051"", opts)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	log.Println(""HTTP gateway on :8080"")
+	log.Fatal(http.ListenAndServe("":8080"", mux))
+}","package main
+
+import (
+	""encoding/json""
+	""net/http""
+)
+
+type UserResponse struct {
+	UserID string `json:""user_id""`
+}
+
+func main() {
+	http.HandleFunc(""/v1/users/"", func(w http.ResponseWriter, r *http.Request) {
+		resp := UserResponse{UserID: ""123""}
+		json.NewEncoder(w).Encode(resp)
+	})
+	http.ListenAndServe("":8080"", nil)
+}",Medium,https://grpc-ecosystem.github.io/grpc-gateway
+19,Buf Tooling,Use buf.build for protobuf management and linting,"Buf provides linting, breaking change detection, and code generation for Protobuf. Use buf.yaml for configuration and buf generate for code generation.",Use buf lint and buf breaking in CI and buf generate for code gen,Run protoc directly with long flag lists or skip linting proto files,"// buf.yaml
+// version: v2
+// lint:
+//   use:
+//     - STANDARD
+// breaking:
+//   use:
+//     - FILE
+
+// buf.gen.yaml
+// version: v2
+// plugins:
+//   - remote: buf.build/protocolbuffers/go
+//     out: gen
+//     opt: paths=source_relative
+//   - remote: buf.build/grpc/go
+//     out: gen
+//     opt: paths=source_relative
+
+// CI commands:
+// buf lint
+// buf breaking --against '.git#branch=main'
+// buf generate
+
+// Go usage of generated code:
+package main
+
+import userv1 ""github.com/myapp/gen/user/v1""
+
+var _ userv1.UserServiceServer = (*userServer)(nil)","// Manual protoc command:
+// protoc --go_out=. --go_opt=paths=source_relative \
+//   --go-grpc_out=. --go-grpc_opt=paths=source_relative \
+//   -I. -I/usr/local/include \
+//   proto/user/v1/user.proto
+
+package main
+
+func main() {}",Medium,https://buf.build/docs/introduction
+20,Testing,Use bufconn for in-memory gRPC testing,"bufconn provides an in-memory net.Listener for testing gRPC services without network overhead. Create a real gRPC server and client connected through bufconn.",Use bufconn.Listen to create in-memory connections for tests,Use net.Listen on a random port or mock the entire gRPC client interface,"package server
+
+import (
+	""context""
+	""net""
+	""testing""
+
+	""google.golang.org/grpc""
+	""google.golang.org/grpc/credentials/insecure""
+	""google.golang.org/grpc/test/bufconn""
+
+	userv1 ""github.com/myapp/gen/user/v1""
+)
+
+func setupTest(t *testing.T) userv1.UserServiceClient {
+	t.Helper()
+	lis := bufconn.Listen(1024 * 1024)
+	t.Cleanup(func() { lis.Close() })
+
+	srv := grpc.NewServer()
+	userv1.RegisterUserServiceServer(srv, &userServer{})
+	t.Cleanup(func() { srv.Stop() })
+
+	go func() {
+		if err := srv.Serve(lis); err != nil {
+			t.Logf(""server exited: %v"", err)
+		}
+	}()
+
+	conn, err := grpc.NewClient(
+		""passthrough:///bufconn"",
+		grpc.WithContextDialer(func(ctx context.Context, s string) (net.Conn, error) {
+			return lis.DialContext(ctx)
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf(""failed to dial: %v"", err)
+	}
+	t.Cleanup(func() { conn.Close() })
+
+	return userv1.NewUserServiceClient(conn)
+}
+
+func TestCreateUser(t *testing.T) {
+	client := setupTest(t)
+	resp, err := client.CreateUser(context.Background(), &userv1.CreateUserRequest{
+		Email:       ""test@example.com"",
+		DisplayName: ""Test User"",
+	})
+	if err != nil {
+		t.Fatalf(""CreateUser failed: %v"", err)
+	}
+	if resp.GetUserId() == """" {
+		t.Error(""expected non-empty user_id"")
+	}
+}","package server
+
+import (
+	""context""
+	""testing""
+
+	userv1 ""github.com/myapp/gen/user/v1""
+)
+
+type mockUserClient struct{}
+
+func (m *mockUserClient) CreateUser(ctx context.Context, req *userv1.CreateUserRequest) (*userv1.CreateUserResponse, error) {
+	return &userv1.CreateUserResponse{UserId: ""mock-id""}, nil
+}
+
+func TestCreateUser(t *testing.T) {
+	client := &mockUserClient{}
+	resp, _ := client.CreateUser(context.Background(), &userv1.CreateUserRequest{})
+	if resp.UserId != ""mock-id"" {
+		t.Fail()
+	}
+}",High,https://pkg.go.dev/google.golang.org/grpc/test/bufconn
+21,Streaming,Implement server, client, and bidirectional streaming correctly,"Use streaming RPCs for large data transfers or real-time updates. Handle stream errors, send/recv loops, and EOF properly.",Check for io.EOF on Recv and call SendAndClose or CloseSend appropriately,Ignore stream errors or forget to close streams properly,"// Proto:
+// rpc ListUsers(ListUsersRequest) returns (stream ListUsersResponse);
+
+package server
+
+import (
+	""io""
+
+	""google.golang.org/grpc/codes""
+	""google.golang.org/grpc/status""
+
+	userv1 ""github.com/myapp/gen/user/v1""
+)
+
+func (s *userServer) ListUsers(req *userv1.ListUsersRequest, stream userv1.UserService_ListUsersServer) error {
+	users, err := s.repo.List(stream.Context(), req.GetPageSize())
+	if err != nil {
+		return status.Errorf(codes.Internal, ""failed to list users: %v"", err)
+	}
+	for _, u := range users {
+		if err := stream.Send(&userv1.ListUsersResponse{
+			UserId:      u.ID,
+			Email:       u.Email,
+			DisplayName: u.DisplayName,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Client-side consumption:
+// stream, err := client.ListUsers(ctx, req)
+// for {
+//   resp, err := stream.Recv()
+//   if err == io.EOF { break }
+//   if err != nil { return err }
+//   process(resp)
+// }","package server
+
+import (
+	userv1 ""github.com/myapp/gen/user/v1""
+)
+
+func (s *userServer) ListUsers(req *userv1.ListUsersRequest, stream userv1.UserService_ListUsersServer) error {
+	users, _ := s.repo.List(stream.Context(), 100)
+	for _, u := range users {
+		stream.Send(&userv1.ListUsersResponse{UserId: u.ID})
+	}
+	return nil
+}",High,https://grpc.io/docs/languages/go/basics/#server-side-streaming-rpc
+22,Error Details,Use errdetails for rich error information,"The errdetails package provides structured error details like BadRequest, PreconditionFailure, and ResourceInfo. Attach them to status errors for machine-readable error responses.",Use status.WithDetails to attach errdetails types to errors,Return error messages as plain strings without structured details,"package server
+
+import (
+	""context""
+
+	""google.golang.org/genproto/googleapis/rpc/errdetails""
+	""google.golang.org/grpc/codes""
+	""google.golang.org/grpc/status""
+
+	userv1 ""github.com/myapp/gen/user/v1""
+)
+
+func (s *userServer) CreateUser(ctx context.Context, req *userv1.CreateUserRequest) (*userv1.CreateUserResponse, error) {
+	var violations []*errdetails.BadRequest_FieldViolation
+
+	if req.GetEmail() == """" {
+		violations = append(violations, &errdetails.BadRequest_FieldViolation{
+			Field:       ""email"",
+			Description: ""email is required"",
+		})
+	}
+	if req.GetDisplayName() == """" {
+		violations = append(violations, &errdetails.BadRequest_FieldViolation{
+			Field:       ""display_name"",
+			Description: ""display_name is required"",
+		})
+	}
+
+	if len(violations) > 0 {
+		st := status.New(codes.InvalidArgument, ""invalid request"")
+		detailed, err := st.WithDetails(&errdetails.BadRequest{
+			FieldViolations: violations,
+		})
+		if err != nil {
+			return nil, st.Err()
+		}
+		return nil, detailed.Err()
+	}
+
+	return &userv1.CreateUserResponse{UserId: ""new-id""}, nil
+}","package server
+
+import (
+	""context""
+	""fmt""
+
+	""google.golang.org/grpc/codes""
+	""google.golang.org/grpc/status""
+
+	userv1 ""github.com/myapp/gen/user/v1""
+)
+
+func (s *userServer) CreateUser(ctx context.Context, req *userv1.CreateUserRequest) (*userv1.CreateUserResponse, error) {
+	if req.GetEmail() == """" {
+		return nil, status.Errorf(codes.InvalidArgument, fmt.Sprintf(""email is required, display_name is also needed""))
+	}
+	return &userv1.CreateUserResponse{UserId: ""new-id""}, nil
+}",Medium,https://pkg.go.dev/google.golang.org/genproto/googleapis/rpc/errdetails
+23,Middleware Chain,Chain multiple interceptors in proper order,"Order matters when chaining interceptors. Auth should run before logging. Recovery should be outermost. Use grpc.ChainUnaryInterceptor for clear ordering.",Order interceptors: recovery -> logging -> auth -> business logic,Use a single interceptor that handles everything or rely on random ordering,"package main
+
+import (
+	""log""
+	""net""
+
+	""google.golang.org/grpc""
+
+	""github.com/myapp/internal/interceptor""
+	userv1 ""github.com/myapp/gen/user/v1""
+)
+
+func main() {
+	lis, err := net.Listen(""tcp"", "":50051"")
+	if err != nil {
+		log.Fatalf(""failed to listen: %v"", err)
+	}
+
+	srv := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(
+			interceptor.RecoveryUnaryInterceptor,
+			interceptor.LoggingUnaryInterceptor,
+			interceptor.AuthUnaryInterceptor,
+		),
+		grpc.ChainStreamInterceptor(
+			interceptor.LoggingStreamInterceptor,
+		),
+	)
+
+	userv1.RegisterUserServiceServer(srv, &userServer{})
+
+	log.Println(""gRPC server with chained interceptors on :50051"")
+	if err := srv.Serve(lis); err != nil {
+		log.Fatalf(""failed to serve: %v"", err)
+	}
+}","package main
+
+import (
+	""context""
+	""log""
+	""net""
+	""time""
+
+	""google.golang.org/grpc""
+	""google.golang.org/grpc/codes""
+	""google.golang.org/grpc/metadata""
+	""google.golang.org/grpc/status""
+)
+
+func megaInterceptor(
+	ctx context.Context,
+	req any,
+	info *grpc.UnaryServerInfo,
+	handler grpc.UnaryHandler,
+) (any, error) {
+	start := time.Now()
+	md, _ := metadata.FromIncomingContext(ctx)
+	tokens := md.Get(""authorization"")
+	if len(tokens) == 0 {
+		return nil, status.Errorf(codes.Unauthenticated, ""no token"")
+	}
+	resp, err := handler(ctx, req)
+	log.Printf(""%s took %s"", info.FullMethod, time.Since(start))
+	return resp, err
+}
+
+func main() {
+	srv := grpc.NewServer(grpc.UnaryInterceptor(megaInterceptor))
+	lis, _ := net.Listen(""tcp"", "":50051"")
+	srv.Serve(lis)
+}",High,https://pkg.go.dev/google.golang.org/grpc#ChainUnaryInterceptor
+24,Logging Interceptor,Add structured logging to gRPC calls via interceptors,"Create logging interceptors that capture method name, duration, status code, and error. Use structured logging (slog or zerolog) for machine-parseable output.",Use log/slog or a structured logger in interceptors with gRPC-specific fields,Use fmt.Println or log.Printf with unstructured messages in handlers,"package interceptor
+
+import (
+	""context""
+	""log/slog""
+	""time""
+
+	""google.golang.org/grpc""
+	""google.golang.org/grpc/status""
+)
+
+func SlogUnaryInterceptor(logger *slog.Logger) grpc.UnaryServerInterceptor {
+	return func(
+		ctx context.Context,
+		req any,
+		info *grpc.UnaryServerInfo,
+		handler grpc.UnaryHandler,
+	) (any, error) {
+		start := time.Now()
+		resp, err := handler(ctx, req)
+		duration := time.Since(start)
+
+		st, _ := status.FromError(err)
+		attrs := []slog.Attr{
+			slog.String(""method"", info.FullMethod),
+			slog.Duration(""duration"", duration),
+			slog.String(""code"", st.Code().String()),
+		}
+
+		if err != nil {
+			attrs = append(attrs, slog.String(""error"", err.Error()))
+			logger.LogAttrs(ctx, slog.LevelError, ""gRPC call failed"", attrs...)
+		} else {
+			logger.LogAttrs(ctx, slog.LevelInfo, ""gRPC call completed"", attrs...)
+		}
+
+		return resp, err
+	}
+}
+
+// Usage:
+// logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+// srv := grpc.NewServer(
+//   grpc.ChainUnaryInterceptor(SlogUnaryInterceptor(logger)),
+// )","package server
+
+import (
+	""context""
+	""fmt""
+	""time""
+
+	userv1 ""github.com/myapp/gen/user/v1""
+)
+
+func (s *userServer) GetUser(ctx context.Context, req *userv1.GetUserRequest) (*userv1.GetUserResponse, error) {
+	start := time.Now()
+	fmt.Printf(""GetUser called with id=%s\n"", req.GetUserId())
+	resp := &userv1.GetUserResponse{UserId: req.GetUserId()}
+	fmt.Printf(""GetUser completed in %s\n"", time.Since(start))
+	return resp, nil
+}",High,https://pkg.go.dev/log/slog
+25,Auth Interceptor,Validate authentication tokens in a gRPC interceptor,"Extract bearer tokens from gRPC metadata in a unary interceptor. Validate the token and inject user identity into the context for downstream handlers.",Extract tokens from metadata and validate in an interceptor that skips public methods,Validate auth tokens inside each individual service method,"package interceptor
+
+import (
+	""context""
+	""strings""
+
+	""google.golang.org/grpc""
+	""google.golang.org/grpc/codes""
+	""google.golang.org/grpc/metadata""
+	""google.golang.org/grpc/status""
+)
+
+type contextKey string
+
+const userIDKey contextKey = ""user_id""
+
+var publicMethods = map[string]bool{
+	""/grpc.health.v1.Health/Check"": true,
+}
+
+func AuthUnaryInterceptor(validateToken func(string) (string, error)) grpc.UnaryServerInterceptor {
+	return func(
+		ctx context.Context,
+		req any,
+		info *grpc.UnaryServerInfo,
+		handler grpc.UnaryHandler,
+	) (any, error) {
+		if publicMethods[info.FullMethod] {
+			return handler(ctx, req)
+		}
+
+		md, ok := metadata.FromIncomingContext(ctx)
+		if !ok {
+			return nil, status.Errorf(codes.Unauthenticated, ""missing metadata"")
+		}
+
+		authHeaders := md.Get(""authorization"")
+		if len(authHeaders) == 0 {
+			return nil, status.Errorf(codes.Unauthenticated, ""missing authorization header"")
+		}
+
+		token := strings.TrimPrefix(authHeaders[0], ""Bearer "")
+		userID, err := validateToken(token)
+		if err != nil {
+			return nil, status.Errorf(codes.Unauthenticated, ""invalid token: %v"", err)
+		}
+
+		ctx = context.WithValue(ctx, userIDKey, userID)
+		return handler(ctx, req)
+	}
+}
+
+func UserIDFromContext(ctx context.Context) string {
+	uid, _ := ctx.Value(userIDKey).(string)
+	return uid
+}","package server
+
+import (
+	""context""
+	""strings""
+
+	""google.golang.org/grpc/codes""
+	""google.golang.org/grpc/metadata""
+	""google.golang.org/grpc/status""
+
+	userv1 ""github.com/myapp/gen/user/v1""
+)
+
+func (s *userServer) GetUser(ctx context.Context, req *userv1.GetUserRequest) (*userv1.GetUserResponse, error) {
+	md, _ := metadata.FromIncomingContext(ctx)
+	auth := md.Get(""authorization"")
+	if len(auth) == 0 {
+		return nil, status.Errorf(codes.Unauthenticated, ""no token"")
+	}
+	token := strings.TrimPrefix(auth[0], ""Bearer "")
+	if token != ""valid-token"" {
+		return nil, status.Errorf(codes.Unauthenticated, ""bad token"")
+	}
+	return &userv1.GetUserResponse{UserId: req.GetUserId()}, nil
+}",Critical,https://grpc.io/docs/guides/auth

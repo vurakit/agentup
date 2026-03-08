@@ -1,0 +1,468 @@
+No,Pattern Name,Category,Keywords,Description,Setup,Code Example,Common Mistake,Package,Docs URL
+1,Table-Driven Tests,Core,"table,driven,cases,subtests","Go's idiomatic pattern for running multiple test cases through the same logic using a slice of structs","Standard library only; define a slice of anonymous structs with input and expected fields","func TestAdd(t *testing.T) {
+	tests := []struct {
+		name     string
+		a, b     int
+		expected int
+	}{
+		{""positive numbers"", 2, 3, 5},
+		{""negative numbers"", -1, -2, -3},
+		{""zero"", 0, 0, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Add(tt.a, tt.b)
+			if got != tt.expected {
+				t.Errorf(""Add(%d, %d) = %d; want %d"", tt.a, tt.b, got, tt.expected)
+			}
+		})
+	}
+}","Forgetting to capture the loop variable in parallel subtests (pre Go 1.22); using tt inside a goroutine without reassigning it to a local variable first",testing,https://pkg.go.dev/testing
+2,Subtests,Core,"subtest,t.Run,named,hierarchical","Use t.Run() to create named subtests that can be filtered and run independently with go test -run","Standard library only; call t.Run inside a test function","func TestParse(t *testing.T) {
+	t.Run(""valid input"", func(t *testing.T) {
+		result, err := Parse(""42"")
+		if err != nil {
+			t.Fatalf(""unexpected error: %v"", err)
+		}
+		if result != 42 {
+			t.Errorf(""Parse(""42"") = %d; want 42"", result)
+		}
+	})
+	t.Run(""invalid input"", func(t *testing.T) {
+		_, err := Parse(""abc"")
+		if err == nil {
+			t.Fatal(""expected error for invalid input"")
+		}
+	})
+}","Not using t.Fatalf when a subsequent assertion depends on a previous one succeeding; using t.Errorf when the test should stop immediately on failure",testing,https://pkg.go.dev/testing#T.Run
+3,TestMain,Core,"setup,teardown,suite,main","Provides a single entry point to run setup before and teardown after all tests in a package","Standard library only; define func TestMain(m *testing.M) in one test file per package","func TestMain(m *testing.M) {
+	db, err := setupTestDB()
+	if err != nil {
+		log.Fatalf(""failed to setup test db: %v"", err)
+	}
+	code := m.Run()
+	db.Close()
+	os.Exit(code)
+}
+
+func setupTestDB() (*sql.DB, error) {
+	return sql.Open(""sqlite3"", "":memory:"")
+}","Forgetting to call os.Exit with the code from m.Run(); this causes tests to always report success even when they fail",testing,https://pkg.go.dev/testing#hdr-Main
+4,HTTP Testing,HTTP,"httptest,server,handler,request","Use httptest.NewServer to spin up a local HTTP server for testing handlers and clients","Import net/http/httptest from the standard library","func TestHealthHandler(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(""ok""))
+	})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + ""/health"")
+	if err != nil {
+		t.Fatalf(""request failed: %v"", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf(""status = %d; want 200"", resp.StatusCode)
+	}
+}","Not calling defer srv.Close() which leaks goroutines and open ports; also not closing the response body which leaks connections",net/http/httptest,https://pkg.go.dev/net/http/httptest
+5,Parallel Tests,Core,"parallel,concurrent,t.Parallel","Run subtests concurrently using t.Parallel() to speed up independent test cases","Standard library only; call t.Parallel() as the first statement in a subtest","func TestParallel(t *testing.T) {
+	tests := []struct {
+		name  string
+		input int
+		want  int
+	}{
+		{""double 1"", 1, 2},
+		{""double 2"", 2, 4},
+		{""double 3"", 3, 6},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := Double(tt.input)
+			if got != tt.want {
+				t.Errorf(""Double(%d) = %d; want %d"", tt.input, got, tt.want)
+			}
+		})
+	}
+}","In Go versions before 1.22 the loop variable tt is shared across iterations; failing to rebind it with tt := tt before the t.Run closure causes all parallel subtests to use the last value",testing,https://pkg.go.dev/testing#T.Parallel
+6,Test Helpers,Core,"helper,t.Helper,line numbers","Mark a function as a test helper so that when it calls t.Errorf the failure is reported at the caller's line number","Standard library only; call t.Helper() as the first line of the helper function","func assertStatusCode(t *testing.T, resp *http.Response, want int) {
+	t.Helper()
+	if resp.StatusCode != want {
+		t.Errorf(""status code = %d; want %d"", resp.StatusCode, want)
+	}
+}
+
+func TestAPI(t *testing.T) {
+	srv := httptest.NewServer(myHandler())
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + ""/ping"")
+	if err != nil {
+		t.Fatalf(""request failed: %v"", err)
+	}
+	defer resp.Body.Close()
+	assertStatusCode(t, resp, http.StatusOK)
+}","Forgetting to call t.Helper() in the helper function; error messages then point to the helper's source file and line instead of the actual test that failed",testing,https://pkg.go.dev/testing#T.Helper
+7,Test Cleanup,Core,"cleanup,t.Cleanup,defer,teardown","Register cleanup functions that run after the test and all its subtests complete; works like defer but for test lifecycle","Standard library only; call t.Cleanup with a function inside the test","func TestWithTempFile(t *testing.T) {
+	f, err := os.CreateTemp("""", ""test-*"")
+	if err != nil {
+		t.Fatalf(""failed to create temp file: %v"", err)
+	}
+	t.Cleanup(func() {
+		f.Close()
+		os.Remove(f.Name())
+	})
+	_, err = f.WriteString(""hello"")
+	if err != nil {
+		t.Fatalf(""failed to write: %v"", err)
+	}
+	// file is automatically removed after test
+}","Using defer instead of t.Cleanup in subtests; defer runs when the function returns but t.Cleanup runs after the test and all its subtests finish which is often what you actually need",testing,https://pkg.go.dev/testing#T.Cleanup
+8,Testify Assert,Assertion,"testify,assert,require,equal","Use testify/assert for soft assertions and testify/require for hard assertions that stop the test on failure","go get github.com/stretchr/testify","func TestUser(t *testing.T) {
+	user, err := GetUser(1)
+	require.NoError(t, err)
+	require.NotNil(t, user)
+
+	assert.Equal(t, ""Alice"", user.Name)
+	assert.Equal(t, 30, user.Age)
+	assert.NotEmpty(t, user.Email)
+	assert.True(t, user.Active)
+}","Using assert when you should use require; if GetUser returns nil and you use assert.NoError the test continues and panics on user.Name. Use require to stop immediately when subsequent code depends on the result",github.com/stretchr/testify,https://pkg.go.dev/github.com/stretchr/testify
+9,Mock Generation,Mocking,"mockery,generate,interface,mock","Use mockery to auto-generate mock implementations of interfaces for testing","go install github.com/vektra/mockery/v2@latest; add //go:generate mockery --name=UserRepo directive","//go:generate mockery --name=UserRepo
+type UserRepo interface {
+	FindByID(ctx context.Context, id int) (*User, error)
+}
+
+func TestService(t *testing.T) {
+	mockRepo := NewMockUserRepo(t)
+	mockRepo.EXPECT().FindByID(mock.Anything, 1).Return(&User{Name: ""Alice""}, nil)
+
+	svc := NewService(mockRepo)
+	user, err := svc.GetUser(context.Background(), 1)
+	require.NoError(t, err)
+	assert.Equal(t, ""Alice"", user.Name)
+	mockRepo.AssertExpectations(t)
+}","Not running go generate before tests; also not passing t to NewMock which means mock assertion failures are not reported properly as test failures",github.com/vektra/mockery/v2,https://pkg.go.dev/github.com/vektra/mockery/v2
+10,Interface Mocking,Mocking,"interface,manual,mock,fake","Create manual mock implementations of interfaces without code generation tools","No external dependencies; define a struct that satisfies the interface","type Emailer interface {
+	Send(to string, subject string, body string) error
+}
+
+type mockEmailer struct {
+	sendFunc func(to, subject, body string) error
+	calls    []string
+}
+
+func (m *mockEmailer) Send(to, subject, body string) error {
+	m.calls = append(m.calls, to)
+	if m.sendFunc != nil {
+		return m.sendFunc(to, subject, body)
+	}
+	return nil
+}
+
+func TestNotify(t *testing.T) {
+	em := &mockEmailer{}
+	svc := NewNotifier(em)
+	err := svc.NotifyUser(""alice@example.com"", ""Hello"")
+	if err != nil {
+		t.Fatalf(""unexpected error: %v"", err)
+	}
+	if len(em.calls) != 1 || em.calls[0] != ""alice@example.com"" {
+		t.Errorf(""expected one call to alice@example.com; got %v"", em.calls)
+	}
+}","Making the mock too rigid by hardcoding return values instead of using function fields; this makes the mock unusable across different test scenarios without creating multiple types",testing,https://pkg.go.dev/testing
+11,Integration Tests,Build,"integration,build tags,short,skip","Use build tags or testing.Short() to separate integration tests from unit tests","Add //go:build integration at the top of integration test files; run with go test -tags=integration","//go:build integration
+
+package db_test
+
+import (
+	""database/sql""
+	""testing""
+	_ ""github.com/lib/pq""
+)
+
+func TestPostgresInsert(t *testing.T) {
+	if testing.Short() {
+		t.Skip(""skipping integration test in short mode"")
+	}
+	db, err := sql.Open(""postgres"", ""postgres://localhost:5432/testdb?sslmode=disable"")
+	if err != nil {
+		t.Fatalf(""failed to connect: %v"", err)
+	}
+	defer db.Close()
+	_, err = db.Exec(""INSERT INTO users (name) VALUES ($1)"", ""Alice"")
+	if err != nil {
+		t.Fatalf(""insert failed: %v"", err)
+	}
+}","Forgetting the blank line after the //go:build directive; also running integration tests in CI without the required services or build tags which causes confusing failures",testing,https://go.dev/doc/build-constraints
+12,Testcontainers,Integration,"testcontainers,docker,database,container","Use testcontainers-go to spin up real Docker containers for integration testing with actual databases and services","go get github.com/testcontainers/testcontainers-go; Docker must be running","func TestWithPostgres(t *testing.T) {
+	ctx := context.Background()
+	req := testcontainers.ContainerRequest{
+		Image:        ""postgres:15"",
+		ExposedPorts: []string{""5432/tcp""},
+		Env: map[string]string{
+			""POSTGRES_PASSWORD"": ""test"",
+			""POSTGRES_DB"":       ""testdb"",
+		},
+		WaitingFor: wait.ForListeningPort(""5432/tcp""),
+	}
+	pg, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
+	require.NoError(t, err)
+	defer pg.Terminate(ctx)
+
+	host, _ := pg.Host(ctx)
+	port, _ := pg.MappedPort(ctx, ""5432"")
+	dsn := fmt.Sprintf(""postgres://postgres:test@%s:%s/testdb?sslmode=disable"", host, port.Port())
+	db, err := sql.Open(""postgres"", dsn)
+	require.NoError(t, err)
+	defer db.Close()
+	require.NoError(t, db.Ping())
+}","Not deferring container termination which leaves orphaned Docker containers running; also not using the WaitingFor strategy which causes connection failures because the container is not ready yet",github.com/testcontainers/testcontainers-go,https://pkg.go.dev/github.com/testcontainers/testcontainers-go
+13,Fuzzing,Core,"fuzz,fuzzing,corpus,Go 1.18","Use Go's built-in fuzzing to automatically generate inputs that find edge cases and crash bugs","Go 1.18 or later; define a function starting with Fuzz and taking *testing.F","func FuzzParseJSON(f *testing.F) {
+	f.Add([]byte(""{""name"":""alice""}""))
+	f.Add([]byte(""[]""))
+	f.Add([]byte(""null""))
+	f.Add([]byte(""""))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		var result map[string]interface{}
+		err := json.Unmarshal(data, &result)
+		if err != nil {
+			return
+		}
+		out, err := json.Marshal(result)
+		if err != nil {
+			t.Fatalf(""Marshal failed after successful Unmarshal: %v"", err)
+		}
+		if len(out) == 0 {
+			t.Fatal(""Marshal returned empty output"")
+		}
+	})
+}","Not adding seed corpus values with f.Add(); also returning errors from the fuzz target instead of using t.Fatal/t.Skip which is the correct way to signal failures in fuzz functions",testing,https://go.dev/doc/security/fuzz
+14,Benchmark Testing,Performance,"benchmark,b.N,ResetTimer,ReportAllocs","Write benchmarks to measure function performance; use b.ResetTimer after expensive setup and b.ReportAllocs for memory tracking","Standard library only; define a function starting with Benchmark and taking *testing.B","func BenchmarkSort(b *testing.B) {
+	b.ReportAllocs()
+	data := make([]int, 10000)
+	for i := range data {
+		data[i] = rand.Intn(10000)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		copied := make([]int, len(data))
+		copy(copied, data)
+		sort.Ints(copied)
+	}
+}
+
+func BenchmarkConcat(b *testing.B) {
+	b.Run(""sprintf"", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_ = fmt.Sprintf(""%s-%d"", ""hello"", 42)
+		}
+	})
+	b.Run(""builder"", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			var sb strings.Builder
+			sb.WriteString(""hello"")
+			sb.WriteByte('-')
+			sb.WriteString(""42"")
+			_ = sb.String()
+		}
+	})
+}","Forgetting b.ResetTimer after setup so the setup time is included in the benchmark; also modifying shared state inside the loop without copying which causes the second iteration to operate on already-sorted data",testing,https://pkg.go.dev/testing#B
+15,Golden Files,Snapshot,"golden,snapshot,testdata,update","Compare test output against golden files stored in testdata/ and use a flag to update them when the output intentionally changes","Standard library only; store expected outputs in testdata/*.golden files","var update = flag.Bool(""update"", false, ""update golden files"")
+
+func TestRender(t *testing.T) {
+	result := Render(inputData)
+	golden := filepath.Join(""testdata"", t.Name()+"".golden"")
+
+	if *update {
+		err := os.MkdirAll(""testdata"", 0o755)
+		if err != nil {
+			t.Fatalf(""failed to create testdata dir: %v"", err)
+		}
+		err = os.WriteFile(golden, []byte(result), 0o644)
+		if err != nil {
+			t.Fatalf(""failed to write golden file: %v"", err)
+		}
+	}
+
+	expected, err := os.ReadFile(golden)
+	if err != nil {
+		t.Fatalf(""failed to read golden file: %v (run with -update)"", err)
+	}
+	if result != string(expected) {
+		t.Errorf(""output mismatch:\ngot:\n%s\nwant:\n%s"", result, string(expected))
+	}
+}","Committing the -update flag as true in test code; also not normalizing line endings which causes tests to fail across different operating systems",testing,https://pkg.go.dev/testing
+16,TempDir,Core,"tempdir,t.TempDir,temporary,filesystem","Use t.TempDir() to create a temporary directory that is automatically cleaned up when the test finishes","Go 1.15 or later; standard library only","func TestWriteConfig(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, ""config.json"")
+
+	cfg := Config{Host: ""localhost"", Port: 8080}
+	err := WriteConfig(configPath, cfg)
+	if err != nil {
+		t.Fatalf(""WriteConfig failed: %v"", err)
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf(""failed to read config: %v"", err)
+	}
+
+	var got Config
+	err = json.Unmarshal(data, &got)
+	if err != nil {
+		t.Fatalf(""failed to unmarshal: %v"", err)
+	}
+	if got.Port != 8080 {
+		t.Errorf(""Port = %d; want 8080"", got.Port)
+	}
+}","Manually creating temp directories with os.MkdirTemp and forgetting to defer os.RemoveAll; t.TempDir handles all cleanup automatically and should be preferred",testing,https://pkg.go.dev/testing#T.TempDir
+17,FS Testing,Filesystem,"fstest,MapFS,io/fs,embed","Use testing/fstest.MapFS to create an in-memory filesystem for testing code that accepts fs.FS interfaces","Go 1.16 or later; import testing/fstest","func TestReadConfig(t *testing.T) {
+	fsys := fstest.MapFS{
+		""config/app.json"": &fstest.MapFile{
+			Data: []byte(""{""name"":""myapp"",""version"":""1.0""}""),
+		},
+		""config/db.json"": &fstest.MapFile{
+			Data: []byte(""{""host"":""localhost"",""port"":5432}""),
+		},
+	}
+
+	cfg, err := ReadConfig(fsys, ""config/app.json"")
+	if err != nil {
+		t.Fatalf(""ReadConfig failed: %v"", err)
+	}
+	if cfg.Name != ""myapp"" {
+		t.Errorf(""Name = %s; want myapp"", cfg.Name)
+	}
+
+	err = fstest.TestFS(fsys, ""config/app.json"", ""config/db.json"")
+	if err != nil {
+		t.Fatalf(""TestFS failed: %v"", err)
+	}
+}","Using os.DirFS or real filesystem paths instead of fstest.MapFS in tests; also adding leading slashes to paths in MapFS keys which causes files to not be found since fs.FS paths must not start with a slash",testing/fstest,https://pkg.go.dev/testing/fstest
+18,Race Detector,Concurrency,"race,data race,concurrent,goroutine","Run tests with the -race flag to detect data races caused by unsynchronized access to shared memory","Standard library only; run tests with go test -race ./...","func TestConcurrentMap(t *testing.T) {
+	m := NewSafeMap()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			key := fmt.Sprintf(""key-%d"", n)
+			m.Set(key, n)
+			_ = m.Get(key)
+		}(i)
+	}
+	wg.Wait()
+
+	if m.Len() != 100 {
+		t.Errorf(""map length = %d; want 100"", m.Len())
+	}
+}
+
+// Run with: go test -race -run TestConcurrentMap","Not running -race in CI; the race detector only finds races that are actually exercised during the test run so you need sufficient concurrent test coverage. Also the race detector makes tests 2-10x slower so some teams skip it and miss real bugs",sync,https://go.dev/doc/articles/race_detector
+19,Coverage,Tooling,"coverage,profile,coverprofile,html","Use go test -cover to measure test coverage and -coverprofile to generate detailed reports","Standard library only; run go test -coverprofile=coverage.out ./...","func TestCalculator(t *testing.T) {
+	tests := []struct {
+		name string
+		op   string
+		a, b float64
+		want float64
+	}{
+		{""add"", ""+"", 2, 3, 5},
+		{""subtract"", ""-"", 5, 3, 2},
+		{""multiply"", ""*"", 4, 3, 12},
+		{""divide"", ""/"", 10, 2, 5},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := Calculate(tt.op, tt.a, tt.b)
+			if err != nil {
+				t.Fatalf(""unexpected error: %v"", err)
+			}
+			if got != tt.want {
+				t.Errorf(""Calculate(%s, %g, %g) = %g; want %g"", tt.op, tt.a, tt.b, got, tt.want)
+			}
+		})
+	}
+}
+
+// Run: go test -coverprofile=coverage.out ./...
+// View: go tool cover -html=coverage.out","Chasing 100% coverage instead of focusing on meaningful tests; also only looking at line coverage and ignoring branch coverage. Use go tool cover -func=coverage.out for per-function breakdown",testing,https://go.dev/blog/cover
+20,E2E Testing,HTTP,"e2e,end-to-end,httpexpect,api","Use httpexpect to write expressive end-to-end HTTP API tests with fluent assertions on status codes headers and JSON bodies","go get github.com/gavv/httpexpect/v2","func TestAPI_E2E(t *testing.T) {
+	handler := SetupRouter()
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	e := httpexpect.Default(t, server.URL)
+
+	e.POST(""/users"").
+		WithJSON(map[string]interface{}{
+			""name"":  ""Alice"",
+			""email"": ""alice@example.com"",
+		}).
+		Expect().
+		Status(http.StatusCreated).
+		JSON().Object().
+		HasValue(""name"", ""Alice"").
+		ContainsKey(""id"")
+
+	e.GET(""/users"").
+		Expect().
+		Status(http.StatusOK).
+		JSON().Array().NotEmpty()
+}","Not using httptest.NewServer and instead hitting a real running server which makes tests flaky and environment-dependent; also not closing the test server which leaks resources",github.com/gavv/httpexpect/v2,https://pkg.go.dev/github.com/gavv/httpexpect/v2
+21,Test Fixtures,Organization,"fixtures,testdata,embed,test data","Store test input data in the testdata/ directory which Go tooling ignores during builds but includes in test binaries","Standard library only; create a testdata/ directory in your package","func TestParseFile(t *testing.T) {
+	files, err := filepath.Glob(""testdata/input_*.json"")
+	if err != nil {
+		t.Fatalf(""failed to glob testdata: %v"", err)
+	}
+	if len(files) == 0 {
+		t.Fatal(""no test fixtures found in testdata/"")
+	}
+
+	for _, file := range files {
+		name := filepath.Base(file)
+		t.Run(name, func(t *testing.T) {
+			data, err := os.ReadFile(file)
+			if err != nil {
+				t.Fatalf(""failed to read %s: %v"", file, err)
+			}
+			result, err := ParseDocument(data)
+			if err != nil {
+				t.Fatalf(""ParseDocument failed: %v"", err)
+			}
+			if result.Title == """" {
+				t.Error(""expected non-empty title"")
+			}
+		})
+	}
+}","Putting test fixtures outside the testdata/ directory; Go treats testdata/ specially and will not compile Go files inside it. Also using absolute paths to fixtures which breaks when tests run from different working directories",testing,https://pkg.go.dev/cmd/go#hdr-Test_packages
+22,Deep Comparison,Assertion,"cmp,diff,compare,equal","Use google/go-cmp to perform deep equality checks on structs with readable diffs that show exactly which fields differ","go get github.com/google/go-cmp/cmp","func TestUserProfile(t *testing.T) {
+	got := FetchProfile(1)
+	want := &Profile{
+		Name:    ""Alice"",
+		Age:     30,
+		Address: Address{City: ""Portland"", State: ""OR""},
+		Tags:    []string{""admin"", ""active""},
+	}
+
+	if diff := cmp.Diff(want, got); diff != """" {
+		t.Errorf(""FetchProfile(1) mismatch (-want +got):\n%s"", diff)
+	}
+}
+
+func TestWithOptions(t *testing.T) {
+	got := FetchTimestamp()
+	want := Event{Name: ""deploy""}
+
+	opts := cmp.Options{
+		cmpopts.IgnoreFields(Event{}, ""CreatedAt""),
+		cmpopts.SortSlices(func(a, b string) bool { return a < b }),
+	}
+	if diff := cmp.Diff(want, got, opts...); diff != """" {
+		t.Errorf(""event mismatch (-want +got):\n%s"", diff)
+	}
+}","Using reflect.DeepEqual instead of go-cmp; DeepEqual provides no diff output and cannot handle unexported fields or custom comparison logic. Also forgetting cmpopts.IgnoreUnexported for structs with unexported fields which causes a panic",github.com/google/go-cmp/cmp,https://pkg.go.dev/github.com/google/go-cmp/cmp
