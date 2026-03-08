@@ -1,0 +1,30 @@
+# ─── AgentUp .npmignore ───────────────────────────────
+# ALL skill data, scripts, and templates are private.
+# They are downloaded from server after license activation.
+# Only the CLI binary ships on NPM.
+
+# Skill data (PRIVATE)
+src/
+assets/
+
+# Dev files
+.venv/
+__pycache__/
+*.pyc
+.env
+.env.local
+
+# Tests
+tests/
+*.test.*
+
+# IDE
+.vscode/
+.idea/
+
+# Git
+.git/
+.gitignore
+
+# Build artifacts
+*.tgz

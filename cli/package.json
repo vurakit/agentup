@@ -1,0 +1,45 @@
+{
+  "name": "@agentup/cli",
+  "version": "1.2.0",
+  "description": "AgentUp — AI skills for production-grade code (Go, Node.js, Rust, Frontend)",
+  "bin": {
+    "agentup": "./dist/index.js"
+  },
+  "scripts": {
+    "prebuild": "node -e \"const fs=require('fs'); if(fs.existsSync('../skills')) fs.cpSync('../skills','./skills',{recursive:true,force:true}); else console.log('skills dir not found, skipping copy')\"",
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "golang",
+    "go",
+    "nodejs",
+    "typescript",
+    "rust",
+    "ai",
+    "skill",
+    "claude",
+    "cursor",
+    "windsurf",
+    "patterns",
+    "best-practices",
+    "architecture"
+  ],
+  "author": "AgentUp",
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^12.0.0",
+    "inquirer": "^9.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "dist",
+    "skills"
+  ]
+}

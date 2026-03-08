@@ -1,0 +1,5 @@
+node_modules/
+dist/
+skills/
+*.tsbuildinfo
+__pycache__/
