@@ -1,0 +1,31 @@
+No,Condition,Action,Domains,Priority,Description
+1,"query contains 'sql injection' OR 'xss' OR 'csrf' OR 'vulnerability' OR 'hack' OR 'exploit' OR 'owasp' OR 'authentication bypass'",Add security domain results with high priority,security,Critical,Security-related queries must always include security domain best practices
+2,"query contains 'password' OR 'hash' OR 'bcrypt' OR 'argon2' OR 'encrypt' OR 'secret' OR 'api key' OR 'token'",Add security domain for credential handling,security,Critical,Credential management queries need security domain guidance
+3,"query contains 'n+1' OR 'slow query' OR 'eager load' OR 'lazy load' OR 'index' OR 'cache' OR 'opcache'",Add performance domain results,performance,High,Performance-related queries should include optimization guidance
+4,"query contains 'test' OR 'phpunit' OR 'pest' OR 'mock' OR 'factory' OR 'assert' OR 'coverage'",Add testing domain results,testing,High,Testing queries need comprehensive testing patterns and tools
+5,"query contains 'exception' OR 'try catch' OR 'error handler' OR 'logging' OR 'sentry' OR 'debug' OR 'stack trace'",Add error-handling domain results,error-handling,High,Error handling queries need exception and logging best practices
+6,"query contains 'docker' OR 'deploy' OR 'ci/cd' OR 'github actions' OR 'kubernetes' OR 'production'",Add tooling domain results,tooling,Medium,Deployment queries should include DevOps tooling guidance
+7,"query contains 'composer' OR 'package' OR 'require' OR 'autoload' OR 'psr-4' OR 'vendor'",Add dependency domain results,dependency,Medium,Package management queries need Composer best practices
+8,"query contains 'repository' OR 'service' OR 'controller' OR 'middleware' OR 'ddd' OR 'hexagonal' OR 'clean architecture'",Add architecture domain results,architecture,High,Architecture queries need comprehensive pattern guidance
+9,"query contains 'factory' OR 'singleton' OR 'observer' OR 'strategy' OR 'decorator' OR 'adapter' OR 'design pattern'",Add patterns domain results,patterns,High,Design pattern queries need pattern implementation examples
+10,"query contains 'interface' OR 'abstract' OR 'trait' OR 'enum' OR 'generic' OR 'type hint' OR 'readonly'",Add interfaces domain results,interfaces,Medium,OOP and type system queries need interface design guidance
+11,"query contains 'best practice' OR 'convention' OR 'idiom' OR 'psr' OR 'standard' OR 'coding style'",Add idioms domain results,idioms,Medium,Convention queries should include PHP idioms and standards
+12,"query contains 'anti-pattern' OR 'smell' OR 'bad practice' OR 'avoid' OR 'wrong' OR 'mistake' OR 'common error'",Add anti-patterns domain results,anti-patterns,High,Queries about bad practices need anti-pattern awareness
+13,"query contains 'phpstan' OR 'psalm' OR 'php-cs-fixer' OR 'pint' OR 'rector' OR 'xdebug' OR 'debugbar'",Add tooling domain results,tooling,Medium,Tool-specific queries need detailed tooling guidance
+14,"query contains 'laravel' OR 'eloquent' OR 'artisan' OR 'blade' OR 'sanctum' OR 'horizon'",Add laravel stack results,laravel,High,Laravel-specific queries should include framework best practices
+15,"query contains 'symfony' OR 'doctrine' OR 'twig' OR 'messenger' OR 'voter' OR 'bundle'",Add symfony stack results,symfony,High,Symfony-specific queries should include framework best practices
+16,"query contains 'api' AND ('rest' OR 'json' OR 'endpoint' OR 'resource')",Add architecture domain AND check for API-specific stack,architecture,High,API design queries need both architecture and framework guidance
+17,"query contains 'queue' OR 'job' OR 'worker' OR 'async' OR 'background' OR 'dispatch'",Add queue stack results and performance domain,queue,High,Queue queries need job processing patterns and performance tips
+18,"query contains 'database' OR 'migration' OR 'model' OR 'relationship' OR 'foreign key'",Add database stack results,database,High,Database queries need ORM and migration best practices
+19,"query contains 'livewire' OR 'wire:' OR 'alpine' OR 'reactive' OR 'real-time'",Add livewire stack results,livewire,Medium,Livewire queries need component and reactivity patterns
+20,"query contains 'validation' OR 'form request' OR 'sanitize' OR 'filter'",Add security AND appropriate framework domain,security,Medium,Validation queries touch both security and framework conventions
+21,"query contains 'upload' OR 'file' OR 'storage' OR 'disk' OR 's3'",Add security domain for file handling,security,Medium,File handling queries need security considerations
+22,"query contains 'cors' OR 'header' OR 'ssl' OR 'https' OR 'tls'",Add security domain for transport security,security,Medium,Transport security queries need HTTP security headers guidance
+23,"query contains 'rate limit' OR 'throttle' OR 'brute force' OR 'ddos'",Add security AND performance domains,security,High,Rate limiting touches both security and performance
+24,"query contains 'multi-tenant' OR 'saas' OR 'tenant' OR 'multi-database'",Add architecture domain AND database stack,architecture,High,Multi-tenancy queries need architecture and database guidance
+25,"query contains 'event' OR 'listener' OR 'observer' OR 'dispatch' OR 'subscribe'",Add patterns domain for event-driven patterns,patterns,Medium,Event-driven queries need design pattern guidance
+26,"query contains 'microservice' OR 'distributed' OR 'service mesh' OR 'api gateway'",Add architecture domain with microservice focus,architecture,High,Microservice queries need comprehensive architecture guidance
+27,"query contains 'serverless' OR 'lambda' OR 'vapor' OR 'bref'",Add architecture domain AND tooling for serverless,architecture,Medium,Serverless queries need both architecture and deployment guidance
+28,"query contains 'codeigniter' OR 'ci4' OR 'ci3'",Add codeigniter stack results,codeigniter,Medium,CodeIgniter queries should include framework-specific practices
+29,"query contains 'slim' OR 'micro-framework' OR 'psr-7' OR 'psr-15'",Add slim stack results,slim,Medium,Slim/micro-framework queries need PSR middleware patterns
+30,"query contains 'api platform' OR 'api-platform' OR 'hydra' OR 'json-ld'",Add api-platform stack results,api-platform,Medium,API Platform queries need Symfony-based API practices

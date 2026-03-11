@@ -1,7 +1,7 @@
 # AgentUp
 
 ![Version](https://img.shields.io/badge/version-1.4.0-blue)
-![Languages](https://img.shields.io/badge/languages-Go%20%7C%20Node.js%20%7C%20Rust-green)
+![Languages](https://img.shields.io/badge/languages-Go%20%7C%20Node.js%20%7C%20Rust%20%7C%20PHP-green)
 ![Platforms](https://img.shields.io/badge/platforms-Claude%20%7C%20Cursor%20%7C%20Windsurf%20%7C%20Antigravity-purple)
 ![Python](https://img.shields.io/badge/python-3.x-yellow)
 ![License](https://img.shields.io/badge/license-MIT-orange)
@@ -27,12 +27,13 @@ npx @agentup/cli init --platform claude --lang go
 npx @agentup/cli init --platform cursor --lang nodejs
 npx @agentup/cli init --platform windsurf --lang go,nodejs
 npx @agentup/cli init --platform antigravity --lang rust
+npx @agentup/cli init --platform cursor --lang php
 npx @agentup/cli init --platform claude --lang rust --no-frontend
 ```
 
 **Supported platforms:** `claude` · `cursor` · `windsurf` · `antigravity`
 
-**Supported languages:** `go` · `nodejs` · `rust` · `python` _(coming soon)_ · `database` _(coming soon)_
+**Supported languages:** `go` · `nodejs` · `rust` · `php` · `python` _(coming soon)_ · `database` _(coming soon)_
 
 **Frontend skill** (UI/UX) is installed by default alongside any language skill.
 
@@ -54,6 +55,9 @@ your-project/
     │   └── scripts/
     ├── rust/
     │   ├── data/            # 14 CSV knowledge databases
+    │   └── scripts/
+    ├── php/
+    │   ├── data/            # 21 CSV knowledge databases
     │   └── scripts/
     └── frontend/
         ├── data/            # UI/UX knowledge databases
@@ -138,6 +142,29 @@ It also appends the skill workflow to your AI config file (`CLAUDE.md`, `.cursor
 
 ---
 
+### PHP
+
+12 searchable knowledge domains for production PHP code.
+
+| Domain       | Coverage                                               |
+| ------------ | ------------------------------------------------------ |
+| `pattern`    | Repository, Factory, Observer, Strategy, Middleware... |
+| `package`    | Composer package recommendations by use case           |
+| `error`      | Custom exceptions, handlers, logging, API errors       |
+| `perf`       | OPcache, indexing, eager loading, caching              |
+| `test`       | PHPUnit, Pest, factories, mocking, feature tests       |
+| `security`   | OWASP top 10, SQL injection, XSS, CSRF, auth           |
+| `interface`  | SOLID, type safety, enums, readonly, PSR               |
+| `arch`       | MVC, DDD, Hexagonal, CQRS, Modular Monolith            |
+| `idiom`      | PHP 8+, match, arrow functions, strict types           |
+| `anti`       | God controller, N+1, mass assignment, no validation    |
+| `tooling`    | PHPStan, Pint, Rector, Xdebug, Horizon                 |
+| `dependency` | Composer, PSR-4, versioning, security audit            |
+
+**8 stack guidelines:** `laravel` · `symfony` · `codeigniter` · `slim` · `api-platform` · `livewire` · `database` · `queue`
+
+---
+
 ### UI/UX Frontend
 
 Installed by default with any language skill. Covers design systems, component patterns, accessibility, and framework-specific best practices.
@@ -197,6 +224,10 @@ python3 .claude/skills/nodejs/scripts/search.py "loader action" --stack web-remi
 python3 .claude/skills/rust/scripts/search.py "typestate pattern" --domain pattern
 python3 .claude/skills/rust/scripts/search.py "middleware extractor" --stack web-axum
 
+# PHP
+python3 .claude/skills/php/scripts/search.py "prevent sql injection" --domain security
+python3 .claude/skills/php/scripts/search.py "eager load relationship" --stack laravel
+
 # Auto-detect domain (no flag needed)
 python3 .claude/skills/go/scripts/search.py "goroutine channel pipeline"
 ```
@@ -225,6 +256,9 @@ agentup/
 │   │   └── scripts/
 │   ├── rust/
 │   │   ├── data/                # 14 CSV knowledge databases
+│   │   └── scripts/
+│   ├── php/
+│   │   ├── data/                # 21 CSV knowledge databases
 │   │   └── scripts/
 │   └── frontend/
 │       ├── data/
