@@ -1,0 +1,53 @@
+{
+  "skill": "mobile-pro-max",
+  "version": "1.0.0",
+  "platform": "antigravity",
+  "scripts": {
+    "search": "python3 skills/mobile/scripts/search.py",
+    "arch_system": "python3 skills/mobile/scripts/search.py --arch-system"
+  },
+  "domains": [
+    "patterns",
+    "packages",
+    "error-handling",
+    "performance",
+    "testing",
+    "security",
+    "interfaces",
+    "architecture",
+    "idioms",
+    "anti-patterns",
+    "tooling",
+    "dependency"
+  ],
+  "stacks": [
+    "flutter",
+    "react-native",
+    "swiftui",
+    "jetpack-compose",
+    "kotlin-multiplatform",
+    "capacitor",
+    "expo",
+    "native-ios",
+    "native-android"
+  ],
+  "defaults": {
+    "stack": "flutter",
+    "architecture": "clean-architecture",
+    "state_management": "riverpod",
+    "navigation": "go_router"
+  },
+  "features": {
+    "domain_search": true,
+    "stack_search": true,
+    "arch_system": true,
+    "reasoning": true,
+    "auto_detect_domain": true
+  },
+  "data_stats": {
+    "total_domains": 12,
+    "total_stacks": 9,
+    "total_entries": "250+",
+    "reasoning_rules": 25
+  }
+}

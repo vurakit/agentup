@@ -1,0 +1,26 @@
+No,Context Keywords,Recommended Domains,Recommended Stacks,Architecture Focus,Priority Notes
+1,"new project,greenfield,start,setup,scaffold,create app","architecture,patterns,tooling","flutter,react-native",Clean Architecture + Feature-First,Start with project structure and architecture decisions first
+2,"auth,login,signup,register,password,oauth,biometric,session","security,patterns,error-handling","flutter,react-native,swiftui",Strategy Pattern + Interceptor,Focus on secure token storage and auth flow patterns
+3,"api,http,rest,graphql,network,endpoint,request","packages,error-handling,performance","flutter,react-native",Repository + Interceptor,Implement interceptors for auth/retry; use typed error handling
+4,"state,bloc,provider,riverpod,redux,store,reactive","patterns,anti-patterns","flutter,react-native,jetpack-compose",MVVM/BLoC/Redux depending on stack,Match state management to app complexity; avoid over-engineering
+5,"database,sqlite,storage,offline,cache,persistence,local","packages,architecture,performance","flutter,react-native,native-android",Repository + Offline-First,Consider offline-first if connectivity is unreliable
+6,"test,testing,unit,widget,integration,coverage,mock","testing,patterns","flutter,react-native",Test Pyramid,Focus on unit > widget > integration test ratio
+7,"navigation,route,deeplink,tab,drawer,flow","patterns,interfaces","flutter,react-native,swiftui,jetpack-compose",Coordinator/Router,Centralize navigation logic; support deep links from start
+8,"performance,speed,jank,slow,memory,leak,optimize","performance,anti-patterns","flutter,react-native,jetpack-compose",Profiling + Optimization,Profile first then optimize; focus on rendering and memory
+9,"security,encrypt,token,keychain,keystore,ssl,certificate","security,packages","flutter,native-ios,native-android",Defense in Depth,Secure storage + certificate pinning + obfuscation
+10,"ui,design,layout,responsive,theme,dark mode,accessibility","interfaces,idioms","flutter,swiftui,jetpack-compose",Design System,Build design system with tokens before screens
+11,"deploy,release,ci,cd,fastlane,store,publish,build","tooling,dependency","flutter,react-native,expo",CI/CD Pipeline,Automate build-test-deploy pipeline; use Fastlane or EAS
+12,"error,crash,exception,failure,debug,logging","error-handling,tooling,anti-patterns","flutter,react-native",Global Error Handler + Crash Reporting,Set up crash reporting early; use typed failures
+13,"list,scroll,pagination,infinite,feed,lazy","performance,patterns,interfaces","flutter,react-native,jetpack-compose",Pagination + Lazy Loading,Use lazy list builders; implement cursor-based pagination
+14,"form,input,validation,keyboard,autofill","interfaces,idioms","flutter,react-native,swiftui",Reactive Forms,Use correct keyboard types; inline validation; autofill hints
+15,"animation,transition,motion,hero,lottie,rive","performance,interfaces,packages","flutter,react-native",GPU-Composited Animation,Animate transform/opacity; use RepaintBoundary; respect reduce motion
+16,"dependency,package,pubspec,gradle,pod,version","dependency,tooling","flutter,react-native,native-ios,native-android",Dependency Management,Audit packages regularly; use lock files; separate dev dependencies
+17,"architecture,clean,layer,module,feature,structure","architecture,patterns,anti-patterns","flutter,react-native,kotlin-multiplatform",Clean Architecture,Match architecture complexity to project size
+18,"push,notification,fcm,firebase,messaging,alert","packages,tooling","flutter,react-native,expo",Observer Pattern,Handle foreground background and terminated states
+19,"camera,photo,video,media,gallery,picker","packages,idioms","flutter,react-native,capacitor",Strategy Pattern,Handle permissions; support multiple input sources
+20,"payment,stripe,purchase,billing,checkout","packages,security","flutter,react-native",Strategy + Security,PCI compliance; use platform payment APIs; test sandbox
+21,"map,location,gps,geofence,geocoding","packages,performance","flutter,react-native",Observer + Strategy,Battery-aware location; background tracking permissions
+22,"i18n,l10n,translation,locale,language,rtl","interfaces,idioms","flutter,react-native",Strategy Pattern,Plan for localization early; use ARB/i18n files; support RTL
+23,"bluetooth,ble,iot,device,hardware","packages,idioms","flutter,react-native",Observer + Adapter,Handle BLE lifecycle; stream-based data; permission management
+24,"graphql,query,mutation,subscription","packages,patterns","flutter,react-native",Repository Pattern,Use code generation; handle subscriptions for real-time
+25,"background,sync,workmanager,isolate,service","packages,performance","flutter,native-android",Command + Queue,Use WorkManager; batch operations; respect battery
