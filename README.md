@@ -1,7 +1,7 @@
 # AgentUp
 
-![Version](https://img.shields.io/badge/version-1.4.0-blue)
-![Languages](https://img.shields.io/badge/languages-Go%20%7C%20Node.js%20%7C%20Rust%20%7C%20PHP-green)
+![Version](https://img.shields.io/badge/version-1.5.0-blue)
+![Languages](https://img.shields.io/badge/languages-Go%20%7C%20Node.js%20%7C%20Rust%20%7C%20PHP%20%7C%20Mobile-green)
 ![Platforms](https://img.shields.io/badge/platforms-Claude%20%7C%20Cursor%20%7C%20Windsurf%20%7C%20Antigravity-purple)
 ![Python](https://img.shields.io/badge/python-3.x-yellow)
 ![License](https://img.shields.io/badge/license-MIT-orange)
@@ -33,7 +33,7 @@ npx @agentup/cli init --platform claude --lang rust --no-frontend
 
 **Supported platforms:** `claude` · `cursor` · `windsurf` · `antigravity`
 
-**Supported languages:** `go` · `nodejs` · `rust` · `php` · `python` _(coming soon)_ · `database` _(coming soon)_
+**Supported languages:** `go` · `nodejs` · `rust` · `php` · `mobile` · `python` _(coming soon)_ · `database` _(coming soon)_
 
 **Frontend skill** (UI/UX) is installed by default alongside any language skill.
 
@@ -58,6 +58,9 @@ your-project/
     │   └── scripts/
     ├── php/
     │   ├── data/            # 21 CSV knowledge databases
+    │   └── scripts/
+    ├── mobile/
+    │   ├── data/            # 22 CSV knowledge databases
     │   └── scripts/
     └── frontend/
         ├── data/            # UI/UX knowledge databases
@@ -165,6 +168,29 @@ It also appends the skill workflow to your AI config file (`CLAUDE.md`, `.cursor
 
 ---
 
+### Mobile
+
+12 searchable knowledge domains for production mobile code.
+
+| Domain       | Coverage                                                        |
+| ------------ | --------------------------------------------------------------- |
+| `pattern`    | MVVM, BLoC, Clean Architecture, Repository, MVI, VIPER, Redux   |
+| `package`    | Package recommendations by use case (250+ mobile packages)      |
+| `error`      | Either types, crash reporting, offline queues, error boundaries |
+| `perf`       | Widget rebuilds, list optimization, memory, battery, app size   |
+| `test`       | Widget tests, BLoC tests, golden tests, integration, coverage   |
+| `security`   | Secure storage, certificate pinning, obfuscation, auth          |
+| `interface`  | Responsive layout, accessibility, Material 3, dark mode         |
+| `arch`       | Clean Architecture, feature-first, DDD, offline-first, monorepo |
+| `idiom`      | Dart null safety, extensions, pattern matching, async/await     |
+| `anti`       | Massive widgets, setState abuse, memory leaks, deep nesting     |
+| `tooling`    | Flutter DevTools, Fastlane, FVM, Mason, Xcode Instruments       |
+| `dependency` | pubspec.yaml, CocoaPods, Gradle, monorepo, version management   |
+
+**9 stack guidelines:** `flutter` · `react-native` · `swiftui` · `jetpack-compose` · `kotlin-multiplatform` · `capacitor` · `expo` · `native-ios` · `native-android`
+
+---
+
 ### UI/UX Frontend
 
 Installed by default with any language skill. Covers design systems, component patterns, accessibility, and framework-specific best practices.
@@ -228,6 +254,11 @@ python3 .claude/skills/rust/scripts/search.py "middleware extractor" --stack web
 python3 .claude/skills/php/scripts/search.py "prevent sql injection" --domain security
 python3 .claude/skills/php/scripts/search.py "eager load relationship" --stack laravel
 
+# Mobile
+python3 .claude/skills/mobile/scripts/search.py "mvvm bloc clean architecture" --domain pattern
+python3 .claude/skills/mobile/scripts/search.py "state management viewmodel" --stack flutter
+python3 .claude/skills/mobile/scripts/search.py "e-commerce cart checkout" --arch-system -p "ShopApp"
+
 # Auto-detect domain (no flag needed)
 python3 .claude/skills/go/scripts/search.py "goroutine channel pipeline"
 ```
@@ -260,6 +291,10 @@ agentup/
 │   ├── php/
 │   │   ├── data/                # 21 CSV knowledge databases
 │   │   └── scripts/
+│   ├── mobile/
+│   │   ├── data/                # 22 CSV knowledge databases (12 domains + 9 stacks + reasoning)
+│   │   ├── scripts/             # BM25 search + architecture generator
+│   │   └── templates/
 │   └── frontend/
 │       ├── data/
 │       └── scripts/
